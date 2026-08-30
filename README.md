@@ -1,15 +1,28 @@
+<div align="center">
+
+<img src="public/favicon.svg" width="110" alt="clovshell logo" />
+
 # clovshell 🍀
+
+**assemble · disassemble · emulate · extract** — the shellcode workbench that runs entirely in your browser
+
+[![ci](https://github.com/atulhacks/clovshell/actions/workflows/ci.yml/badge.svg)](https://github.com/atulhacks/clovshell/actions/workflows/ci.yml)
+[![deploy](https://github.com/atulhacks/clovshell/actions/workflows/deploy.yml/badge.svg)](https://github.com/atulhacks/clovshell/actions/workflows/deploy.yml)
+[![license: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
+[![live demo](https://img.shields.io/badge/live-demo-4ade80.svg)](https://atulhacks.github.io/clovshell/)
 
 **▶ try it live: <https://atulhacks.github.io/clovshell/>**
 
-**shellcode workbench** — assemble, disassemble, **run** and extract x86 / ARM shellcode, entirely in your browser.
+x86-64 · x86-32 · ARM · ARM64 — keystone + capstone + unicorn, all compiled to WebAssembly
+
+<img src="docs/shot-hero.png" width="800" alt="clovshell — syntax-highlighted editor with the null-free execve preset, assembled shellcode bytes, disassembly" />
+
+</div>
 
 Asm goes in, raw bytes come out. Bytes go in, a disassembly listing comes out. Press ▶ run and the shellcode
 actually executes — under a CPU emulator in the page — with syscalls intercepted, buffers shown and register
 deltas flagged. Everything runs as WebAssembly locally: **your shellcode never leaves the page** — no server,
 no telemetry, no network calls.
-
-![clovshell](public/favicon.svg)
 
 ## features
 
@@ -31,6 +44,8 @@ no telemetry, no network calls.
 
 ### run it (emulation) 🆕
 
+<img src="docs/shot-emulation.png" width="800" alt="emulation — execve intercepted in the unicorn engine with the register dump, changed registers highlighted" />
+
 - **in-browser execution** under [Unicorn](https://www.unicorn-engine.org/) (QEMU's CPU cores
   compiled to WASM): your shellcode runs in a sandboxed memory space — code page, 1 MiB stack,
   mmap region — nothing touches the host
@@ -46,6 +61,8 @@ no telemetry, no network calls.
 - shellcodes that `ret` land on a `ud2` sentinel — a clean stop instead of executing garbage
 
 ### xor encoder 🆕
+
+<img src="docs/shot-encoder.png" width="800" alt="xor encoder — generated self-decoding stub source with encoded payload" />
 
 - wraps assembled shellcode in a **self-decoding stub** for all four arches: x86-64/x86-32
   (`call`/`pop` getpc + `xor byte ptr [rsi], key` loop), ARM (`adr`+`bx`), ARM64 (`adr`+`br`)
@@ -173,6 +190,7 @@ src/
 scripts/
   gen-syscalls.mjs  regenerates syscalls-data.ts from torvalds/linux (via gh api, cached)
   copy-wasm.mjs     copies keystone/capstone wasm from node_modules into public/wasm/
+docs/              showcase screenshots used in this README
 public/
   sw.js             service worker — precaches the shell + engines for full offline use
   manifest.webmanifest, favicon.svg
