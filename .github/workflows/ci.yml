@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: install
+        # postinstall copies the keystone/capstone wasm out of node_modules
+        # into public/wasm/ — the vitest suite needs them on disk
+        run: npm ci
+
+      - name: typecheck
+        run: npm run check
+
+      - name: test
+        run: npm test
+
+      - name: build
+        run: npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7

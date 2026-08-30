@@ -1,0 +1,26 @@
+{
+  "name": "clovshell",
+  "description": "shellcode workbench — assemble, disassemble and extract x86/ARM shellcode entirely in your browser",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "license": "GPL-2.0",
+  "scripts": {
+    "postinstall": "node scripts/copy-wasm.mjs",
+    "dev": "node scripts/copy-wasm.mjs && vite",
+    "build": "node scripts/copy-wasm.mjs && vite build",
+    "preview": "vite preview",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@alexaltea/keystone-js": "^0.9.2",
+    "@alexaltea/unicorn-js": "^2.1.4",
+    "capstone-wasm": "^1.0.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^7.1.5",
+    "vitest": "^4.1.11"
+  }
+}

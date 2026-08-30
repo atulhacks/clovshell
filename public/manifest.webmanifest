@@ -1,0 +1,18 @@
+{
+  "name": "clovshell — shellcode workbench",
+  "short_name": "clovshell",
+  "description": "Assemble, disassemble, emulate and extract x86 / ARM / ARM64 shellcode — entirely in your browser.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#060806",
+  "theme_color": "#060806",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

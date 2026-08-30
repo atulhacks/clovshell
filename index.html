@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>clovshell — shellcode workbench</title>
+  <meta name="description" content="Assemble, disassemble, emulate and extract x86 / ARM / ARM64 shellcode — entirely in your browser. XOR encoder, ROP gadget finder, syscall reference. Powered by keystone + capstone + unicorn (WASM)." />
+  <meta name="theme-color" content="#060806" />
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <meta property="og:title" content="clovshell — shellcode workbench" />
+  <meta property="og:description" content="assemble · disassemble · emulate · extract — x86/ARM shellcode with an XOR encoder, ROP gadget finder and syscall reference, fully client-side" />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="clovshell — shellcode workbench" />
+  <meta name="twitter:description" content="assemble · disassemble · emulate · extract — x86/ARM shellcode, fully client-side" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+</head>
+<body>
+  <noscript>
+    <p style="color:#f87171;font-family:monospace;padding:2rem">
+      clovshell needs JavaScript — the assembler and disassembler run locally in your browser.
+    </p>
+  </noscript>
+
+  <aside class="rail" aria-hidden="true">
+    <svg class="rail-clover" viewBox="0 0 32 32" fill="currentColor" aria-hidden="true">
+      <g transform="translate(16 16) rotate(45)">
+        <path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" />
+        <path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" transform="rotate(90)" />
+        <path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" transform="rotate(180)" />
+        <path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" transform="rotate(270)" />
+      </g>
+    </svg>
+    <div class="rail-text">CLOVSHELL</div>
+    <div class="rail-version">v1.0</div>
+  </aside>
+
+  <main class="page">
+    <header class="masthead">
+      <div class="brand">
+        <svg class="brand-clover" viewBox="0 0 32 32" fill="currentColor" aria-hidden="true">
+          <g transform="translate(16 16) rotate(45)">
+            <path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" />
+            <path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" transform="rotate(90)" />
+            <path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" transform="rotate(180)" />
+            <path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" transform="rotate(270)" />
+          </g>
+        </svg>
+        <h1>CLOV<span>SHELL</span></h1>
+      </div>
+      <p class="tagline">assemble · disassemble · extract — x86 / ARM shellcode, fully client-side</p>
+      <div class="engine-chips" role="status">
+        <span class="chip" id="chip-keystone"><i class="dot"></i>keystone</span>
+        <span class="chip" id="chip-capstone"><i class="dot"></i>capstone</span>
+        <span class="chip" id="chip-unicorn"><i class="dot"></i>unicorn</span>
+      </div>
+    </header>
+
+    <div class="toolbar">
+      <label class="arch-label">
+        architecture
+        <select id="arch-select" aria-label="Target architecture">
+          <option value="x86-64">x86-64</option>
+          <option value="x86-32">x86-32</option>
+          <option value="arm">ARM (A32)</option>
+          <option value="arm64">ARM64 (AArch64)</option>
+        </select>
+      </label>
+      <div class="toolbar-actions">
+        <button class="btn ghost" id="btn-share" type="button">share ↗</button>
+      </div>
+    </div>
+
+    <p class="fatal hidden" id="fatal-msg" role="alert"></p>
+
+    <!-- ASSEMBLY -->
+    <section class="section">
+      <div class="section-head">
+        <h2><i class="sq"></i>ASSEMBLY</h2>
+        <div class="section-actions">
+          <span class="hint">ctrl/cmd + ⏎</span>
+          <button class="btn ghost" id="btn-clear-asm" type="button">clear</button>
+          <button class="btn primary" id="btn-assemble" type="button" disabled>assemble</button>
+        </div>
+      </div>
+      <div class="editor-wrap" id="asm-editor-host"></div>
+      <p class="msg" id="asm-msg" role="status"></p>
+    </section>
+
+    <!-- RAW SHELLCODE -->
+    <section class="section">
+      <div class="section-head">
+        <h2><i class="sq"></i>RAW SHELLCODE</h2>
+        <div class="section-actions">
+          <span class="badchars" id="badchars-wrap" title="bytes your target can't stomach — null bytes, newlines, spaces… matches are highlighted and counted">
+            <label for="bad-chars">bad chars</label>
+            <input id="bad-chars" class="badchars-input" type="text" spellcheck="false" autocomplete="off" placeholder="00 0a 20" value="00" aria-label="Bad characters" />
+          </span>
+          <span class="stats" id="shellcode-stats"></span>
+          <button class="btn ghost" id="btn-download-bin" type="button" title="download the raw bytes as a .bin file">⭳ .bin</button>
+          <button class="btn ghost" id="btn-copy-shellcode" type="button">copy</button>
+        </div>
+      </div>
+      <div class="out-box" id="shellcode-out" aria-label="Assembled shellcode hex"></div>
+      <p class="msg" id="bad-chars-msg" role="status"></p>
+    </section>
+
+    <!-- DISASSEMBLY INPUT -->
+    <section class="section">
+      <div class="section-head">
+        <h2><i class="sq"></i>DISASSEMBLY INPUT</h2>
+        <div class="section-actions">
+          <span class="hint">hex · \xNN · 0xNN · drop a file</span>
+          <button class="btn ghost" id="btn-use-asm" type="button" title="Load the bytes assembled above">↑ from assembler</button>
+          <button class="btn ghost" id="btn-clear-hex" type="button">clear</button>
+          <button class="btn primary" id="btn-disassemble" type="button" disabled>disassemble</button>
+        </div>
+      </div>
+      <div class="hex-input-wrap">
+        <textarea id="hex-input" class="hex-input" spellcheck="false" autocapitalize="off"
+          autocomplete="off" wrap="soft" rows="3"
+          placeholder="b8 73 6b 69 64 bb 31 33 33 37 31 c9 90   — or   \xb8\x73\x6b…   — or   0xb8, 0x73, …"
+          aria-label="Hex bytes to disassemble"></textarea>
+      </div>
+      <p class="msg" id="hex-msg" role="status"></p>
+    </section>
+
+    <!-- DISASSEMBLY -->
+    <section class="section">
+      <div class="section-head">
+        <h2><i class="sq"></i>DISASSEMBLY</h2>
+        <div class="section-actions">
+          <span class="stats" id="disasm-stats"></span>
+          <button class="btn ghost" id="btn-gadgets" type="button" title="Slide the disassembler across every byte offset and collect ROP gadgets (x86: ret/jmp/call…, ARM: bx/b/ldr…)">find ROP gadgets</button>
+        </div>
+      </div>
+      <div class="listing" id="disasm-listing" aria-label="Disassembly listing"></div>
+      <div class="gadgets hidden" id="gadgets-panel">
+        <div class="gadgets-head">
+          <h3 class="emu-sub">rop gadgets <span class="dim">— click one to copy it</span></h3>
+          <input id="gadget-filter" class="syscall-search" type="search" placeholder="filter… (pop rdi, syscall)" aria-label="Filter gadgets" />
+          <span class="stats" id="gadget-stats"></span>
+          <button class="btn ghost" id="btn-gadgets-copy" type="button">copy all</button>
+        </div>
+        <div class="gadget-list" id="gadget-list"></div>
+      </div>
+    </section>
+
+    <!-- EMULATION -->
+    <section class="section">
+      <div class="section-head">
+        <h2><i class="sq"></i>EMULATION</h2>
+        <div class="section-actions">
+          <span class="hint">runs in a sandbox — syscalls are emulated, nothing executes for real</span>
+          <span class="emu-arg" id="emu-arg-wrap" title="initial value of the first-argument register when the shellcode starts — function-style shellcode takes its input here">
+            <label for="emu-arg">entry <code id="emu-arg-label">rdi</code> =</label>
+            <input id="emu-arg" class="emu-arg-input" type="text" spellcheck="false" autocomplete="off" placeholder="0x0" aria-label="Entry argument value" />
+          </span>
+          <button class="btn ghost" id="btn-clear-emu" type="button">clear</button>
+          <button class="btn primary" id="btn-run-emu" type="button">▶ run</button>
+        </div>
+      </div>
+      <div class="emu-grid">
+        <div class="emu-col">
+          <h3 class="emu-sub">syscalls</h3>
+          <div class="emu-log" id="emu-log"><div class="listing-empty">// press ▶ run to execute the assembled shellcode<br>under the unicorn engine — syscall arguments, buffers and<br>exit state are shown here</div></div>
+        </div>
+        <div class="emu-col">
+          <h3 class="emu-sub">registers <span class="dim">(changed highlighted)</span></h3>
+          <div class="emu-regs" id="emu-regs"></div>
+        </div>
+      </div>
+      <p class="msg" id="emu-msg" role="status"></p>
+    </section>
+
+    <!-- XOR ENCODER -->
+    <section class="section">
+      <div class="section-head">
+        <h2><i class="sq"></i>XOR ENCODER</h2>
+        <div class="section-actions">
+          <span class="hint">wraps the assembled bytes in a self-decoding stub</span>
+        </div>
+      </div>
+      <div class="encoder-controls">
+        <label class="enc-key-label" for="enc-key">key
+          <input id="enc-key" class="enc-key" type="text" spellcheck="false" autocomplete="off" value="0x2a" aria-label="XOR key" />
+        </label>
+        <button class="btn primary" id="btn-encode" type="button">encode</button>
+        <button class="btn ghost" id="btn-encode-auto" type="button" title="Try every key and pick one whose full program avoids your bad characters">auto-pick key</button>
+        <button class="btn ghost" id="btn-encode-load" type="button" title="Replace the editor with the encoded source and run it — the emulator proves the decoder works">→ editor &amp; run</button>
+      </div>
+      <div class="out-box enc-preview empty" id="enc-preview" aria-label="Encoded shellcode source">// the decoder stub + encoded payload appear here</div>
+      <p class="msg" id="enc-msg" role="status"></p>
+      <p class="enc-note dim" id="enc-note"></p>
+    </section>
+
+    <!-- SYSCALLS -->
+    <section class="section">
+      <div class="section-head">
+        <h2><i class="sq"></i>SYSCALLS <span class="dim">— linux numbers for this arch</span></h2>
+        <div class="section-actions">
+          <input id="syscall-search" class="syscall-search" type="search" placeholder="filter… (execve, socket, 59)" aria-label="Filter syscalls" />
+        </div>
+      </div>
+      <div class="syscall-list" id="syscall-list" aria-label="Syscall reference"></div>
+    </section>
+
+    <!-- PRESETS -->
+    <section class="section">
+      <div class="section-head">
+        <h2><i class="sq"></i>PRESETS</h2>
+        <div class="section-actions"><span class="hint">loads into the editor — assembled &amp; emulated live</span></div>
+      </div>
+      <div class="presets-row" id="presets-row"></div>
+    </section>
+
+    <!-- EXPORTS -->
+    <section class="section">
+      <div class="section-head">
+        <h2><i class="sq"></i>EXPORTS <span class="dim" id="exports-source"></span></h2>
+      </div>
+      <div class="exports-grid" id="exports-grid"></div>
+    </section>
+
+    <footer class="footer">
+      <p>
+        <span class="clover">🍀</span> clovshell — the assembler, disassembler and emulator run as WebAssembly
+        in your browser: <strong>your shellcode never leaves this page</strong>.
+      </p>
+      <p class="dim">
+        keystone <span class="dim">(GPL-2.0)</span> · capstone <span class="dim">(BSD-3)</span> · unicorn <span class="dim">(GPL-2.0)</span> ·
+        keystrokes only, no telemetry — for security research, CTFs &amp; education.
+      </p>
+      <p class="dim">v1.0 · works offline once loaded</p>
+    </footer>
+  </main>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

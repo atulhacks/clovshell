@@ -1,0 +1,17 @@
+node_modules/
+dist/
+
+# engine wasm files are copied out of node_modules by scripts/copy-wasm.mjs
+# (postinstall / dev / build) — never commit 6 MB of build inputs
+public/wasm/
+
+# downloaded kernel sources, cached input for scripts/gen-syscalls.mjs
+scripts/kernel-src/
+
+# local browser-test artifacts
+.testout/
+.vite/
+
+*.log
+.DS_Store
+.claude/settings.local.json
