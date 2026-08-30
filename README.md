@@ -1,5 +1,7 @@
 # clovshell 🍀
 
+**▶ try it live: <https://atulhacks.github.io/clovshell/>**
+
 **shellcode workbench** — assemble, disassemble, **run** and extract x86 / ARM shellcode, entirely in your browser.
 
 Asm goes in, raw bytes come out. Bytes go in, a disassembly listing comes out. Press ▶ run and the shellcode
@@ -136,8 +138,9 @@ host, including subpaths like `user.github.io/clovshell/`:
 npm run build   # → dist/
 ```
 
-- **GitHub Pages** — push `dist/` to a `gh-pages` branch (or point Pages at a `/dist` workflow
-  artifact). Relative base means no 404s under the repo subpath.
+- **GitHub Pages** — this repo ships a deploy workflow (`.github/workflows/deploy.yml`):
+  every push to `main` builds, tests and publishes to `https://atulhacks.github.io/clovshell/`.
+  The relative base means no 404s under the repo subpath.
 - **Netlify / Vercel / Cloudflare Pages** — build command `npm run build`, publish directory
   `dist`. No framework preset needed.
 - **nginx / any static file server** — serve `dist/`; add `application/wasm` for `.wasm` if your
