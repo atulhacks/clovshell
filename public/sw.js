@@ -7,7 +7,7 @@
 // (plain SW fetch, no Origin header) invisible to another (module script,
 // with Origin) — every lookup here is same-origin, so Vary is noise.
 
-const CACHE = 'clovshell-v1.0';
+const CACHE = 'clovshell-v1.1';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

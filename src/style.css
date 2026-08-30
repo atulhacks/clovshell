@@ -1,24 +1,99 @@
-/* clovshell — dark terminal aesthetic, clover-green accent */
+/* clovshell — dark terminal aesthetic, five themes.
+   :root holds the DEFAULT (mono, black & white) values; html[data-theme="…"]
+   blocks below override the base tokens. Derived tints (accent-soft/glow,
+   bg-glow) are declared once over var(--accent) and re-hue per theme.
+   Semantic --red (errors) and --amber (warnings) are constant across themes. */
 
 :root {
-  --bg: #060806;
-  --bg-glow: rgba(74, 222, 128, 0.05);
-  --bg-panel: #0a0e0a;
-  --bg-inset: #070a07;
-  --bg-hover: #0e140e;
-  --border: #1b261b;
-  --border-bright: #2c3f2c;
-  --green: #4ade80;
-  --green-soft: rgba(74, 222, 128, 0.12);
-  --green-glow: rgba(74, 222, 128, 0.35);
-  --fg: #d7e4d7;
-  --fg-dim: #7c8b7c;
-  --fg-faint: #495749;
+  /* base tokens — mono (black & white) */
+  --bg: #080808;
+  --bg-panel: #0d0d0d;
+  --bg-inset: #0a0a0a;
+  --bg-hover: #131313;
+  --border: #212121;
+  --border-bright: #383838;
+  --accent: #ffffff;
+  --fg: #e8e8e8;
+  --fg-dim: #8f8f8f;
+  --fg-faint: #4a4a4a;
+  /* syntax tokens — grayscale ramp for mono */
+  --tok-num: #d6d6d6;
+  --tok-reg: #9c9c9c;
+  --tok-str: #7f7f7f;
+  --tok-label: #7f7f7f;
+  --tok-dir: #b8b8b8;
+  /* derived tints — recomputed from the active --accent */
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-glow: color-mix(in srgb, var(--accent) 35%, transparent);
+  --bg-glow: color-mix(in srgb, var(--accent) 5%, transparent);
+  /* semantic — constant across all themes */
   --red: #f87171;
   --amber: #fbbf24;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas,
     "Liberation Mono", monospace;
   --rail-w: 46px;
+}
+
+/* colorful syntax palette shared by the four accent themes */
+html[data-theme="purple"], html[data-theme="orange"],
+html[data-theme="red"], html[data-theme="green"] {
+  --tok-num: #fbbf24;
+  --tok-reg: #7dd3fc;
+  --tok-str: #f0abfc;
+  --tok-label: #f0abfc;
+  --tok-dir: #fbbf24;
+}
+
+html[data-theme="purple"] {
+  --bg: #080609;
+  --bg-panel: #0d0a12;
+  --bg-inset: #0a080d;
+  --bg-hover: #131019;
+  --border: #241d31;
+  --border-bright: #3a2f4e;
+  --accent: #a78bfa;
+  --fg: #e0daee;
+  --fg-dim: #8b819f;
+  --fg-faint: #4e4661;
+}
+
+html[data-theme="orange"] {
+  --bg: #0a0705;
+  --bg-panel: #100c08;
+  --bg-inset: #0c0906;
+  --bg-hover: #171008;
+  --border: #2b2014;
+  --border-bright: #473418;
+  --accent: #fb923c;
+  --fg: #ece2d4;
+  --fg-dim: #978872;
+  --fg-faint: #5a4c39;
+}
+
+html[data-theme="red"] {
+  --bg: #0a0505;
+  --bg-panel: #100909;
+  --bg-inset: #0c0707;
+  --bg-hover: #170c0c;
+  --border: #2b1717;
+  --border-bright: #482222;
+  --accent: #ef4444;
+  --fg: #ecdcda;
+  --fg-dim: #977f7c;
+  --fg-faint: #5a403d;
+}
+
+html[data-theme="green"] {
+  --bg: #060806;
+  --bg-panel: #0a0e0a;
+  --bg-inset: #070a07;
+  --bg-hover: #0e140e;
+  --border: #1b261b;
+  --border-bright: #2c3f2c;
+  --accent: #4ade80;
+  --fg: #d7e4d7;
+  --fg-dim: #7c8b7c;
+  --fg-faint: #495749;
 }
 
 * {
@@ -61,7 +136,7 @@ body {
 .rail-clover {
   width: 18px;
   height: 18px;
-  color: var(--green);
+  color: var(--accent);
   opacity: 0.9;
 }
 
@@ -103,8 +178,8 @@ body {
 .brand-clover {
   width: 34px;
   height: 34px;
-  color: var(--green);
-  filter: drop-shadow(0 0 8px var(--green-glow));
+  color: var(--accent);
+  filter: drop-shadow(0 0 8px var(--accent-glow));
 }
 
 .brand h1 {
@@ -113,11 +188,11 @@ body {
   font-weight: 700;
   letter-spacing: 0.18em;
   color: var(--fg);
-  text-shadow: 0 0 24px var(--green-glow);
+  text-shadow: 0 0 24px var(--accent-glow);
 }
 
 .brand h1 span {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .tagline {
@@ -159,8 +234,8 @@ body {
 }
 
 .chip.ok .dot {
-  background: var(--green);
-  box-shadow: 0 0 6px var(--green-glow);
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow);
 }
 
 .chip.err .dot {
@@ -198,8 +273,15 @@ select {
   -webkit-appearance: none;
   font-family: var(--mono);
   font-size: 12.5px;
-  color: var(--green);
-  background: var(--bg-inset) url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%234ade80' stroke-width='1.5' fill='none'/%3E%3C/svg%3E") no-repeat right 10px center;
+  color: var(--accent);
+  /* two tiny gradients form the ▾ chevron — var()-driven so it follows the theme */
+  background-color: var(--bg-inset);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--accent) 50%),
+    linear-gradient(135deg, var(--accent) 50%, transparent 50%);
+  background-position: calc(100% - 15px) calc(50% - 1px), calc(100% - 11px) calc(50% - 1px);
+  background-size: 4px 4px;
+  background-repeat: no-repeat;
   border: 1px solid var(--border-bright);
   border-radius: 3px;
   padding: 6px 32px 6px 12px;
@@ -208,13 +290,55 @@ select {
 }
 
 select:hover {
-  border-color: var(--green);
+  border-color: var(--accent);
   background-color: var(--bg-hover);
 }
 
 select:focus-visible {
-  outline: 1px solid var(--green);
+  outline: 1px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* -------------------------------------------------------------- theme picker */
+
+.theme-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 7px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.theme-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  position: relative;
+  background-color: var(--dot);
+  outline-offset: 2px;
+}
+
+/* unselected dots sit on a hairline ring in their own color; the selected dot
+   gets a thicker ring so the current theme is obvious at a glance */
+.theme-dot::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--dot) 45%, transparent);
+}
+
+.theme-dot[aria-checked="true"]::after {
+  border: 2px solid var(--dot);
+}
+
+.theme-dot:focus-visible {
+  outline: 1px solid var(--accent);
 }
 
 /* ------------------------------------------------------------------ buttons */
@@ -242,13 +366,13 @@ select:focus-visible {
 }
 
 .btn.primary {
-  color: var(--green);
-  border: 1px solid var(--green);
+  color: var(--accent);
+  border: 1px solid var(--accent);
 }
 
 .btn.primary:hover:not(:disabled) {
-  background: var(--green-soft);
-  box-shadow: 0 0 14px rgba(74, 222, 128, 0.15);
+  background: var(--accent-soft);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 .btn.ghost {
@@ -263,8 +387,8 @@ select:focus-visible {
 }
 
 .btn.copied {
-  color: var(--green);
-  border-color: var(--green);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 /* ------------------------------------------------------------------ sections */
@@ -292,7 +416,7 @@ select:focus-visible {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.22em;
-  color: var(--green);
+  color: var(--accent);
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -309,8 +433,8 @@ select:focus-visible {
   display: inline-block;
   width: 7px;
   height: 7px;
-  background: var(--green);
-  box-shadow: 0 0 8px var(--green-glow);
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
 }
 
 .section-actions {
@@ -334,7 +458,7 @@ select:focus-visible {
 }
 
 .stat-ok {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .stat-bad {
@@ -355,7 +479,7 @@ select:focus-visible {
 }
 
 .msg.ok {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .msg.err {
@@ -452,20 +576,20 @@ select:focus-visible {
 }
 
 .tok-mnem {
-  color: var(--green) !important;
+  color: var(--accent) !important;
   font-weight: 600;
 }
 
 .tok-reg {
-  color: #7dd3fc !important;
+  color: var(--tok-reg) !important;
 }
 
 .tok-num {
-  color: #fbbf24 !important;
+  color: var(--tok-num) !important;
 }
 
 .tok-str {
-  color: #f0abfc !important;
+  color: var(--tok-str) !important;
 }
 
 .tok-comment {
@@ -474,11 +598,11 @@ select:focus-visible {
 }
 
 .tok-label {
-  color: #f0abfc !important;
+  color: var(--tok-label) !important;
 }
 
 .tok-dir {
-  color: var(--amber) !important;
+  color: var(--tok-dir) !important;
 }
 
 .tok-id {
@@ -492,7 +616,7 @@ select:focus-visible {
   height: 100%;
   background: transparent;
   color: transparent;
-  caret-color: var(--green);
+  caret-color: var(--accent);
   resize: none;
   outline: none;
   overflow: auto;
@@ -500,7 +624,7 @@ select:focus-visible {
 }
 
 .code-input::selection {
-  background: rgba(74, 222, 128, 0.22);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 /* ------------------------------------------------------------------ outputs */
@@ -508,7 +632,7 @@ select:focus-visible {
 .out-box {
   padding: 12px 14px;
   font-size: 13px;
-  color: var(--green);
+  color: var(--accent);
   word-break: break-all;
   line-height: 1.6;
   min-height: 44px;
@@ -554,7 +678,7 @@ select:focus-visible {
 
 .badchars-input:focus {
   outline: none;
-  border-color: var(--green);
+  border-color: var(--accent);
 }
 
 /* encoder section */
@@ -591,7 +715,7 @@ select:focus-visible {
 
 .enc-key:focus {
   outline: none;
-  border-color: var(--green);
+  border-color: var(--accent);
 }
 
 .enc-preview {
@@ -648,7 +772,7 @@ select:focus-visible {
   padding: 3px 14px;
   white-space: pre;
   cursor: pointer;
-  border-bottom: 1px solid rgba(27, 38, 27, 0.45);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
 }
 
 .gadget-row:hover,
@@ -673,9 +797,9 @@ body.dragging::after {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(6, 8, 6, 0.85);
-  border: 2px dashed var(--green);
-  color: var(--green);
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  border: 2px dashed var(--accent);
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 15px;
   letter-spacing: 0.08em;
@@ -729,7 +853,7 @@ body.dragging::after {
   gap: 18px;
   padding: 3px 14px;
   white-space: pre;
-  border-bottom: 1px solid rgba(27, 38, 27, 0.45);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
 }
 
 .listing .row:hover {
@@ -841,8 +965,15 @@ body.dragging::after {
 }
 
 .footer strong {
-  color: var(--green);
+  color: var(--accent);
   font-weight: 600;
+}
+
+.footer-clover {
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+  vertical-align: -2px;
 }
 
 /* ------------------------------------------------------------------ toast */
@@ -852,14 +983,14 @@ body.dragging::after {
   right: 20px;
   bottom: 20px;
   background: var(--bg-panel);
-  border: 1px solid var(--green);
-  color: var(--green);
+  border: 1px solid var(--accent);
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 12px;
   letter-spacing: 0.04em;
   padding: 10px 16px;
   border-radius: 4px;
-  box-shadow: 0 0 24px rgba(74, 222, 128, 0.15);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--accent) 15%, transparent);
   opacity: 0;
   transform: translateY(6px);
   transition: opacity 0.25s ease, transform 0.25s ease;
@@ -893,7 +1024,7 @@ body.dragging::after {
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: var(--green);
+  background: var(--accent);
 }
 
 /* ------------------------------------------------------------------ responsive */
@@ -983,7 +1114,7 @@ body.dragging::after {
 }
 
 .emu-call-ret {
-  color: var(--green);
+  color: var(--accent);
   flex-shrink: 0;
 }
 
@@ -1011,10 +1142,10 @@ body.dragging::after {
 .emu-reg-val { color: var(--fg-faint); overflow: hidden; text-overflow: ellipsis; }
 
 .emu-reg.changed {
-  border-color: color-mix(in srgb, var(--green) 45%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
-.emu-reg.changed .emu-reg-val { color: var(--green); }
+.emu-reg.changed .emu-reg-val { color: var(--accent); }
 
 /* ------------------------------------------------------------------ emulation */
 
@@ -1049,7 +1180,7 @@ body.dragging::after {
 
 .emu-arg-input:focus {
   outline: none;
-  border-color: var(--green);
+  border-color: var(--accent);
 }
 
 /* ------------------------------------------------------------------ syscalls */
@@ -1067,7 +1198,7 @@ body.dragging::after {
 
 .syscall-search:focus {
   outline: none;
-  border-color: var(--green);
+  border-color: var(--accent);
 }
 
 .syscall-list {
@@ -1093,7 +1224,7 @@ body.dragging::after {
 }
 
 .syscall-item:hover {
-  border-color: var(--green);
+  border-color: var(--accent);
 }
 
 .syscall-num { color: var(--amber); }

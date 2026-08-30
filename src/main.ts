@@ -28,6 +28,7 @@ import { findGadgets, gadgetRows } from './gadgets';
 import type { Gadget } from './gadgets';
 import { createSyscallPanel, syscallScaffold } from './syscalls';
 import { PRESETS } from './presets';
+import { initTheme } from './themes';
 import {
   $, copyText, decodeState, downloadBytes, downloadText, el, encodeState,
   flashCopyFeedback, toast,
@@ -848,6 +849,8 @@ function setChip(chip: HTMLElement, state: 'loading' | 'ok' | 'err'): void {
   chip.classList.remove('loading', 'ok', 'err');
   chip.classList.add(state);
 }
+
+initTheme();
 
 setChip(chipKeystone, 'loading');
 setChip(chipCapstone, 'loading');

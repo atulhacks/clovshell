@@ -5,7 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>clovshell — shellcode workbench</title>
   <meta name="description" content="Assemble, disassemble, emulate and extract x86 / ARM / ARM64 shellcode — entirely in your browser. XOR encoder, ROP gadget finder, syscall reference. Powered by keystone + capstone + unicorn (WASM)." />
-  <meta name="theme-color" content="#060806" />
+  <meta name="theme-color" content="#080808" />
+  <script>
+    // apply the saved theme before first paint (module scripts are deferred —
+    // without this, returning visitors would flash the default theme)
+    try {
+      var t = localStorage.getItem('clovshell:theme');
+      if (/^(mono|purple|orange|red|green)$/.test(t ?? '')) document.documentElement.dataset.theme = t;
+    } catch (e) { /* storage unavailable — default theme */ }
+  </script>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
   <meta property="og:title" content="clovshell — shellcode workbench" />
   <meta property="og:description" content="assemble · disassemble · emulate · extract — x86/ARM shellcode with an XOR encoder, ROP gadget finder and syscall reference, fully client-side" />
@@ -32,7 +40,7 @@
       </g>
     </svg>
     <div class="rail-text">CLOVSHELL</div>
-    <div class="rail-version">v1.0</div>
+    <div class="rail-version">v1.1</div>
   </aside>
 
   <main class="page">
@@ -67,6 +75,7 @@
         </select>
       </label>
       <div class="toolbar-actions">
+        <div id="theme-picker" class="theme-picker" role="radiogroup" aria-label="color theme"></div>
         <button class="btn ghost" id="btn-share" type="button">share ↗</button>
       </div>
     </div>
@@ -224,14 +233,15 @@
 
     <footer class="footer">
       <p>
-        <span class="clover">🍀</span> clovshell — the assembler, disassembler and emulator run as WebAssembly
+        <svg class="footer-clover" viewBox="0 0 32 32" fill="currentColor" aria-hidden="true"><g transform="translate(16 16) rotate(45)"><path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" /><path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" transform="rotate(90)" /><path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" transform="rotate(180)" /><path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" transform="rotate(270)" /></g></svg>
+        clovshell — the assembler, disassembler and emulator run as WebAssembly
         in your browser: <strong>your shellcode never leaves this page</strong>.
       </p>
       <p class="dim">
         keystone <span class="dim">(GPL-2.0)</span> · capstone <span class="dim">(BSD-3)</span> · unicorn <span class="dim">(GPL-2.0)</span> ·
         keystrokes only, no telemetry — for security research, CTFs &amp; education.
       </p>
-      <p class="dim">v1.0 · works offline once loaded</p>
+      <p class="dim">v1.1 · works offline once loaded</p>
     </footer>
   </main>
 

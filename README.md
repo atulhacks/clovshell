@@ -104,6 +104,10 @@ no telemetry, no network calls.
 - **cross-arch hint** — paste bytes that belong to another architecture and the disassembler
   tells you which one decodes them cleanly
 - `↑ from assembler` — pipe assembled bytes straight into the disassembler
+- **five color themes** 🆕 — black & white (default), purple, orange, red, green: the whole
+  workbench — chrome, syntax highlighting, logo, favicon — re-tints from one palette. The dot
+  picker sits next to `share`; your choice persists locally and is deliberately *not* part of
+  share links (recipients keep their own look)
 - shareable URLs (`share ↗` encodes source + arch in the hash), state restored from localStorage
 - `ctrl/cmd + ⏎` to assemble (or disassemble, from the hex box)
 - **installable PWA** 🆕 — manifest + service worker: the whole workbench (shell, engines,
@@ -116,7 +120,7 @@ no telemetry, no network calls.
 ```sh
 npm install     # also copies engine wasm into public/wasm/ (postinstall)
 npm run dev     # http://localhost:5173
-npm test        # vitest suite (82 tests) — assembles/disassembles through the real wasm engines
+npm test        # vitest suite (99 tests) — assembles/disassembles through the real wasm engines
 npm run check   # typescript, no emit
 npm run build   # static site in dist/ — host it anywhere
 npm run preview # serve the production build locally
@@ -183,6 +187,7 @@ src/
   hex.ts            lenient hex parsing, formatting, bad-char & null counting
   formats.ts        the export formatters (python/c/js/powershell/yara…)
   highlight.ts      tiny per-arch asm syntax highlighter
+  themes.ts         five-palette theme registry, picker + themed favicon (mono is the default)
   editor.ts         textarea + backdrop-highlight + gutter, scroll-synced
   ui.ts             small DOM helpers (copy, toast, file download)
   main.ts           app wiring, state, URL sharing
