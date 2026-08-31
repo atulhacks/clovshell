@@ -25,10 +25,30 @@
 </head>
 <body>
   <noscript>
+    <style>#boot { display: none; }</style>
     <p style="color:#f87171;font-family:monospace;padding:2rem">
       clovshell needs JavaScript — the assembler and disassembler run locally in your browser.
     </p>
   </noscript>
+
+  <!-- boot loader: covers the app until the engines are up. The hex line is
+       "clovshell" as machine code — cells lock in as each engine lands. -->
+  <div id="boot" class="boot" aria-label="loading clovshell">
+    <svg class="boot-clover" viewBox="0 0 32 32" fill="currentColor" aria-hidden="true">
+      <g transform="translate(16 16) rotate(45)">
+        <path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" />
+        <path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" transform="rotate(90)" />
+        <path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" transform="rotate(180)" />
+        <path d="M0 0 C -0.5 -5, -6 -9, -10 -5 C -13 -1, -8 3, 0 0 Z" transform="rotate(270)" />
+      </g>
+    </svg>
+    <div class="boot-word">CLOV<span>SHELL</span></div>
+    <div class="boot-hex" id="boot-hex" aria-hidden="true">
+      <b>··</b><b>··</b><b>··</b><b>··</b><b>··</b><b>··</b><b>··</b><b>··</b><b>··</b>
+    </div>
+    <div class="boot-status" id="boot-status">// loading keystone.wasm · 4.3 MB</div>
+  </div>
+
 
   <aside class="rail" aria-hidden="true">
     <svg class="rail-clover" viewBox="0 0 32 32" fill="currentColor" aria-hidden="true">
@@ -40,7 +60,7 @@
       </g>
     </svg>
     <div class="rail-text">CLOVSHELL</div>
-    <div class="rail-version">v1.1</div>
+    <div class="rail-version">v1.2</div>
   </aside>
 
   <main class="page">
@@ -241,7 +261,7 @@
         keystone <span class="dim">(GPL-2.0)</span> · capstone <span class="dim">(BSD-3)</span> · unicorn <span class="dim">(GPL-2.0)</span> ·
         keystrokes only, no telemetry — for security research, CTFs &amp; education.
       </p>
-      <p class="dim">v1.1 · works offline once loaded</p>
+      <p class="dim">v1.2 · works offline once loaded</p>
     </footer>
   </main>
 

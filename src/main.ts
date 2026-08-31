@@ -29,6 +29,7 @@ import type { Gadget } from './gadgets';
 import { createSyscallPanel, syscallScaffold } from './syscalls';
 import { PRESETS } from './presets';
 import { initTheme } from './themes';
+import { bootDone, bootFail, bootStage, initBoot } from './boot';
 import {
   $, copyText, decodeState, downloadBytes, downloadText, el, encodeState,
   flashCopyFeedback, toast,
@@ -851,6 +852,7 @@ function setChip(chip: HTMLElement, state: 'loading' | 'ok' | 'err'): void {
 }
 
 initTheme();
+initBoot();
 
 setChip(chipKeystone, 'loading');
 setChip(chipCapstone, 'loading');
@@ -861,7 +863,7 @@ loadState();
 updateEmuArgUi();
 applyBadChars();
 
-initEngines()
+initEngines((stage) => bootStage(stage))
   .then(() => {
     setChip(chipKeystone, 'ok');
     setChip(chipCapstone, 'ok');
@@ -869,6 +871,8 @@ initEngines()
     btnDisassemble.disabled = false;
     runAssemble();
     runDisassemble();
+    bootStage('assemble');
+    bootDone();
   })
   .catch((err: unknown) => {
     setChip(chipKeystone, 'err');
@@ -877,4 +881,5 @@ initEngines()
       `✗ failed to load engines: ${err instanceof Error ? err.message : String(err)} — ` +
       'check that public/wasm/*.wasm exists (npm run postinstall)';
     fatalMsg.classList.remove('hidden');
+    bootFail();
   });

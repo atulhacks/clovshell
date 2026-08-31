@@ -104,6 +104,11 @@ no telemetry, no network calls.
 - **cross-arch hint** — paste bytes that belong to another architecture and the disassembler
   tells you which one decodes them cleanly
 - `↑ from assembler` — pipe assembled bytes straight into the disassembler
+- **boot loader** 🆕 — the engines are ~6 MB of wasm, so the first visit gets a loading screen
+  that assembles the app's *own name* as machine code: `63 6c 6f 76 73 68 65 6c 6c` cells
+  flicker like an assembler at work and lock in as each engine lands, with a terminal-style
+  status line (`// loading keystone.wasm · 4.3 MB`). Born wearing your saved theme, honors
+  `prefers-reduced-motion`, and never shows for people with JavaScript off
 - **five color themes** 🆕 — black & white (default), purple, orange, red, green: the whole
   workbench — chrome, syntax highlighting, logo, favicon — re-tints from one palette. The dot
   picker sits next to `share`; your choice persists locally and is deliberately *not* part of
@@ -120,7 +125,7 @@ no telemetry, no network calls.
 ```sh
 npm install     # also copies engine wasm into public/wasm/ (postinstall)
 npm run dev     # http://localhost:5173
-npm test        # vitest suite (99 tests) — assembles/disassembles through the real wasm engines
+npm test        # vitest suite (112 tests) — assembles/disassembles through the real wasm engines
 npm run check   # typescript, no emit
 npm run build   # static site in dist/ — host it anywhere
 npm run preview # serve the production build locally
@@ -188,6 +193,7 @@ src/
   formats.ts        the export formatters (python/c/js/powershell/yara…)
   highlight.ts      tiny per-arch asm syntax highlighter
   themes.ts         five-palette theme registry, picker + themed favicon (mono is the default)
+  boot.ts           boot loader: engine milestones lock the name-bytes, then the overlay fades
   editor.ts         textarea + backdrop-highlight + gutter, scroll-synced
   ui.ts             small DOM helpers (copy, toast, file download)
   main.ts           app wiring, state, URL sharing

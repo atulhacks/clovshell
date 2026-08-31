@@ -80,12 +80,16 @@ let capstoneReady = false;
 const ksInstances = new Map<string, KeystoneInstance>();
 const csInstances = new Map<string, Capstone>();
 
-export async function initEngines(): Promise<void> {
+export async function initEngines(
+  onStage?: (stage: 'keystone' | 'capstone') => void,
+): Promise<void> {
   if (keystoneMod && capstoneReady) return;
   const locate = (path: string) => new URL(WASM_BASE + path, document.baseURI).href;
   keystoneMod = await MKeystone({ locateFile: locate });
+  onStage?.('keystone');
   await loadCapstone({ locateFile: locate });
   capstoneReady = true;
+  onStage?.('capstone');
 }
 
 export function enginesReady(): boolean {

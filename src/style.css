@@ -1251,3 +1251,111 @@ body.dragging::after {
   color: var(--fg-faint);
   letter-spacing: 0.04em;
 }
+
+/* ------------------------------------------------------------------ boot loader */
+/* covers the app until the engines are up. Everything reads the theme tokens,
+   so the loader is born already wearing the saved theme. */
+
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  transition: opacity 0.45s ease, transform 0.45s ease, visibility 0.45s;
+}
+
+.boot.done {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: scale(1.03);
+}
+
+.boot-clover {
+  width: 56px;
+  height: 56px;
+  color: var(--accent);
+  filter: drop-shadow(0 0 12px var(--accent-glow));
+  animation: boot-in 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.2) both,
+    boot-breathe 2.4s ease-in-out 0.55s infinite;
+  transform-origin: center;
+}
+
+@keyframes boot-in {
+  from { opacity: 0; transform: scale(0.5) rotate(-90deg); }
+  to { opacity: 1; transform: scale(1) rotate(0deg); }
+}
+
+@keyframes boot-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+.boot-word {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  padding-left: 0.18em; /* optically recenters the tracked-out wordmark */
+  color: var(--fg);
+  text-shadow: 0 0 24px var(--accent-glow);
+}
+
+.boot-word span {
+  color: var(--accent);
+}
+
+.boot-hex {
+  display: flex;
+  gap: 11px;
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--fg-faint);
+}
+
+.boot-hex b {
+  min-width: 2ch;
+  text-align: center;
+  font-weight: 400;
+}
+
+/* a locked byte snaps home with a tiny pop */
+.boot-hex b.on {
+  color: var(--accent);
+  text-shadow: 0 0 12px var(--accent-glow);
+  animation: boot-lock 0.2s ease-out;
+}
+
+@keyframes boot-lock {
+  from { transform: scale(1.3); }
+  to { transform: scale(1); }
+}
+
+.boot-status {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: var(--fg-dim);
+}
+
+.boot-status::after {
+  content: " _";
+  animation: boot-blink 1.1s steps(2, start) infinite;
+}
+
+@keyframes boot-blink {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-clover { animation: none; }
+  .boot-hex b.on { animation: none; }
+  .boot-status::after { animation: none; content: ""; }
+  .boot { transition: opacity 0.2s ease; }
+}
