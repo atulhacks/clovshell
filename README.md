@@ -1,277 +1,137 @@
 <div align="center">
 
-<img src="public/favicon.svg" width="110" alt="clovshell logo" />
+<img src="public/favicon.svg" width="96" alt="clovshell logo" />
 
-# clovshell 🍀
+# clovshell
 
-**assemble · disassemble · emulate · extract** — the shellcode workbench that runs entirely in your browser
+**A shellcode workbench in your browser.** Assemble, disassemble, emulate, inspect, and export x86 and ARM shellcode.
 
-[![ci](https://github.com/atulhacks/clovshell/actions/workflows/ci.yml/badge.svg)](https://github.com/atulhacks/clovshell/actions/workflows/ci.yml)
-[![deploy](https://github.com/atulhacks/clovshell/actions/workflows/deploy.yml/badge.svg)](https://github.com/atulhacks/clovshell/actions/workflows/deploy.yml)
-[![license: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
-[![live demo](https://img.shields.io/badge/live-demo-4ade80.svg)](https://atulhacks.github.io/clovshell/)
+[Live demo](https://atulhacks.github.io/clovshell/) · [Run locally](#run-locally)
 
-**▶ try it live: <https://atulhacks.github.io/clovshell/>**
+[![CI](https://github.com/atulhacks/clovshell/actions/workflows/ci.yml/badge.svg)](https://github.com/atulhacks/clovshell/actions/workflows/ci.yml)
+[![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
 
-x86-64 · x86-32 · ARM · ARM64 — keystone + capstone + unicorn, all compiled to WebAssembly
-
-<img src="docs/shot-hero.png" width="800" alt="clovshell — syntax-highlighted editor with the null-free execve preset, assembled shellcode bytes, disassembly" />
+<img src="docs/shot-hero.png" width="800" alt="clovshell editor, shellcode bytes, and disassembly" />
 
 </div>
 
-Asm goes in, raw bytes come out. Bytes go in, a disassembly listing comes out. Press ▶ run and the shellcode
-actually executes — under a CPU emulator in the page — with syscalls intercepted, buffers shown and register
-deltas flagged. Everything runs as WebAssembly locally: **your shellcode never leaves the page** — no server,
-no telemetry, no network calls.
+clovshell runs [Keystone](https://www.keystone-engine.org/), [Capstone](https://www.capstone-engine.org/),
+and [Unicorn](https://www.unicorn-engine.org/) as WebAssembly. Assembly and emulation happen locally;
+your source and shellcode are not sent to a backend.
 
-## features
+| Target | Mode | Emulated syscall entry |
+| --- | --- | --- |
+| x86-64 | 64-bit | `syscall` |
+| x86-32 | 32-bit | `int 0x80` |
+| ARM | A32 | `svc` |
+| ARM64 | AArch64 | `svc` |
 
-### assemble / disassemble
-
-- **assemble** x86-64 / x86-32 / ARM (A32) / ARM64 (AArch64) assembly to raw shellcode
-  ([keystone](https://www.keystone-engine.org/) compiled to WASM)
-- **disassemble** hex bytes back to a address / bytes / instruction listing
-  ([capstone](https://www.capstone-engine.org/) compiled to WASM)
-- **bad-character checker** 🆕 — type the bytes your target can't stomach (`00 0a 0d ff`) and every
-  offending byte is highlighted in red in the shellcode box *and* the disassembly listing, with a
-  count in the stats line — the classic exploit-writing workflow
-- **null-byte awareness** — nulls are counted, flagged and highlighted (they break string-based
-  injection, you want to know)
-- **drag & drop** 🆕 — drop a `.bin`/raw file onto the page to load it into the hex box; drop
-  `.asm`/`.s` to load it into the editor
-- **download** 🆕 — the raw shellcode as `.bin`, and every export format as its natural file
-  type (`.py`, `.c`, `.rs`, …) via the ⭳ button on each export card
-
-### run it (emulation) 🆕
-
-<img src="docs/shot-emulation.png" width="800" alt="emulation — execve intercepted in the unicorn engine with the register dump, changed registers highlighted" />
-
-- **in-browser execution** under [Unicorn](https://www.unicorn-engine.org/) (QEMU's CPU cores
-  compiled to WASM): your shellcode runs in a sandboxed memory space — code page, 1 MiB stack,
-  mmap region — nothing touches the host
-- **syscall interception** per arch (x86-64 `syscall`, x86-32 `int 0x80`, ARM/ARM64 `svc`):
-  `write` shows the bytes being written, `execve` reads the filename out of emulated memory and
-  stops ("process replaced"), `open`/`socket` hand out fds, `mmap`/`mmap2` map bounded pages,
-  `mprotect`/`munmap` update emulated memory,
-  `exit` / `exit_group` report the exit code; unmodeled calls return `-ENOSYS` rather than
-  pretending to succeed
-- **register dump** after the run, with registers the shellcode touched highlighted
-- **execution trace** — inspect the first 400 executed instructions with their runtime bytes
-  (including self-modified code), resolved disassembly addresses, and pre-instruction register
-  snapshots; step with buttons or arrow keys and export the capture as JSON
-- **entry argument** — set the initial value of the first-arg register (`rdi`/`r0`/`x0`)
-  before running, so function-style shellcode like `sum_to_n` can be tested with real input
-- **fault reporting** — unmapped reads/writes/fetches stop emulation with the faulting address;
-  runaway loops hit a 100 000-instruction limit instead of hanging the tab
-- emulation runs in a dedicated worker, with a 30-second outer timeout, so a slow payload cannot
-  block editor interaction
-- shellcodes that `ret` land on a `ud2` sentinel — a clean stop instead of executing garbage
-
-### xor encoder 🆕
-
-<img src="docs/shot-encoder.png" width="800" alt="xor encoder — generated self-decoding stub source with encoded payload" />
-
-- wraps assembled shellcode in a **self-decoding stub** for all four arches: x86-64/x86-32
-  (`call`/`pop` getpc + `xor byte ptr [rsi], key` loop), ARM (`adr`+`bx`), ARM64 (`adr`+`br`)
-- **auto-pick key** scans 0x01..0xff and reports every key whose *complete program* (stub +
-  encoded payload) avoids your bad characters
-- **verified in the emulator** — "→ editor & run" loads the encoded source, assembles it and runs
-  it, so you watch the decoder decode and the payload execute, not just trust the generator
-- length limits are honest per arch (255 B where the counter is a byte/cl, 4095 B on ARM64's imm12)
-
-### ROP gadget finder 🆕
-
-- **find ROP gadgets** straight from the disassembly panel — the classic
-  [ROPgadget](https://github.com/JonathanSalwan/ROPgadget)/ropper technique in the browser:
-  capstone slides over the byte stream from *every* offset (not just instruction boundaries) and
-  keeps short sequences (≤ 8 insns) ending in a control-flow instruction
-- deduplicated by instruction text, capped at 400 gadgets, filter box, click a row to copy it
-- the scan decodes at most eight instructions per offset in a worker; ARM data instructions only
-  count as terminators when they actually write `pc`
-
-### reference
-
-- **syscall browser** — all 1 634 Linux syscalls across the four arches (x86-64: 386, x86-32: 462,
-  ARM: 437, ARM64: 349), generated straight from the
-  [Linux kernel's syscall tables](https://github.com/torvalds/linux/tree/master/arch). Search,
-  click, and a ready-to-assemble scaffold (`mov rax, 59` + `syscall`, or the per-arch equivalent)
-  is inserted at your cursor
-- **presets** — classic shellcodes per arch (x86-64/x86-32 null-free `execve("/bin/sh")`, exits)
-  with notes; one click loads, assembles *and* runs them
-
-### extraction
-
-- exports for **Python, Python array, C, C string, escaped string, JavaScript, NASM `db`, Base64,
-  PowerShell, C#, Java, Ruby, Rust, YARA** — one click each 🆕
-
-### editor & misc
-
-- syntax-highlighted editor with line numbers, auto-assembly as you type
-- **labels & directives** — GNU-as-style sources just work: `_start:`, `loop:`, `.global`,
-  `.type`, `.section`, `.cfi_*` … all accepted; `.byte`/`.word`/`.quad`/`.asciz` emit real data
-- lenient hex input: `b8736b6964`, `b8 73 6b …`, `\xb8\x73…`, `0xb8, 0x73` all parse
-- **cross-arch hint** — paste bytes that belong to another architecture and the disassembler
-  tells you which one decodes them cleanly
-- `↑ from assembler` — pipe assembled bytes straight into the disassembler
-- **boot loader** 🆕 — the engines are ~6 MB of wasm, so the first visit gets a loading screen
-  that assembles the app's *own name* as machine code: `63 6c 6f 76 73 68 65 6c 6c` cells
-  flicker like an assembler at work and lock in as each engine lands, with a terminal-style
-  status line (`// loading keystone.wasm · 4.3 MB`). Born wearing your saved theme, honors
-  `prefers-reduced-motion`, and never shows for people with JavaScript off
-- **five color themes** 🆕 — black & white (default), purple, orange, red, green: the whole
-  workbench — chrome, syntax highlighting, logo, favicon — re-tints from one palette. The dot
-  picker sits next to `share`; your choice persists locally and is deliberately *not* part of
-  share links (recipients keep their own look)
-- shareable URLs (`share ↗` encodes source + arch in the hash), state restored from localStorage
-- `ctrl/cmd + ⏎` to assemble (or disassemble, from the hex box)
-- **installable PWA** 🆕 — manifest + service worker: the whole workbench (shell, engines,
-  emulation chunks) is precached when the service worker installs, then works **fully offline**;
-  "install" it from
-  your browser and it opens as its own app with zero network
-- responsive down to phone widths — every panel stacks, nothing scrolls sideways
-
-## run it
+## Run locally
 
 ```sh
-npm install     # also copies engine wasm into public/wasm/ (postinstall)
-npm run dev     # http://localhost:5173
-npm test        # vitest suite — tests the real assembler, disassembler and emulator engines
-npm run check   # typescript, no emit
-npm run build   # static site in dist/ — host it anywhere
-npm run preview # serve the production build locally
+npm install
+npm run dev
 ```
 
-`dist/` is fully static: any static host works (GitHub Pages, Netlify, Railway static, nginx, `python -m http.server`).
+Open the URL printed by Vite (normally `http://localhost:5173`). `npm install` copies the Keystone
+and Capstone WASM files into `public/wasm/` through `postinstall`.
 
-## testing
+## What you can do
 
-`src/tests/` holds a [vitest](https://vitest.dev/) suite that runs the *real* keystone/capstone
-wasm engines in Node (a tiny shim points their wasm loader at `public/wasm/` via `file://`):
+### Assemble and inspect
 
-- **ground-truth tables** — syscall numbers are asserted against known kernel values
-  (x86-64 `read`=0 … `openat`=257, arm64 `mmap`=222, …)
-- **every preset** is assembled, disassembled back, and — for the ones claiming *null-free* —
-  byte-scanned for `00` (this test has caught a lying preset in the wild)
-- **the encoder** is proven on all four arches: payload = input ^ key, and the *entire generated
-  stub+payload program* must assemble
-- hex parsing, comment stripping, directive handling, export formats, gadget finding and
-  cross-arch hints are all covered
+- Write x86-64, x86-32, ARM A32, or ARM64 assembly and see the emitted bytes and instruction listing.
+- Paste hex as contiguous bytes, spaced bytes, `\xNN`, or `0xNN`; drop a raw `.bin` file into the page.
+  Assembly files (`.asm`/`.s`) can be dropped into the editor.
+- Highlight bad bytes such as `00 0a 0d`, count null bytes, and download the result as `.bin`.
+- Use labels, common data-emitting directives, and an approximate source-line hint for assembly errors.
+
+### Emulate and trace
+
+- Run shellcode in Unicorn's mapped code and stack memory. Syscalls are intercepted, not issued by
+  the host; the UI shows calls, arguments, return values, faults, and final registers.
+- Step through the first **400 executed instructions**, including the bytes fetched from emulated
+  memory (useful for self-modifying code) and registers captured before each instruction. Navigate
+  with buttons or arrow keys, or save the trace as JSON.
+- Set an initial first-argument register (`rdi`, `r0`, or `x0`) for function-style shellcode.
+- Keep the UI responsive with worker-based emulation, a 30-second outer timeout, and a
+  100,000-instruction limit.
+
+### Transform and extract
+
+- Generate self-decoding XOR wrappers for all four targets. Auto-pick a key that avoids configured
+  bad bytes in the **complete stub and payload**, then load the result into the editor and run it.
+- Find short ROP gadgets by scanning each byte offset, with a 400-result cap and text filtering.
+- Export Python, C, C#, Java, JavaScript, Rust, Ruby, PowerShell, NASM, Base64, escaped strings,
+  and YARA snippets. Each format has copy and download controls.
+
+### Work faster
+
+- Browse per-architecture Linux syscall numbers and insert an assembly scaffold at the cursor.
+- Load tested `execve` and exit presets with one click. Share source and architecture through a
+  URL fragment; the editor also restores local state.
+- Choose among five themes. The layout works at phone widths and respects reduced-motion settings.
+- Install the production build as a PWA. Once its assets have been precached, it works offline,
+  including the lazy-loaded emulator engines.
+
+[Emulation screenshot](docs/shot-emulation.png) · [XOR encoder screenshot](docs/shot-encoder.png)
+
+## Scope and limits
+
+clovshell is a CPU-and-syscall workbench, **not a full Linux VM**. File and socket operations are
+simulated; unmodeled syscalls return `-ENOSYS`. It currently exposes ARM **A32**, not Thumb, and
+supports only the four targets in the table above.
+
+The emulator stops on unmapped memory faults. Returning shellcode lands on a sentinel instead of
+continuing into unrelated memory. Its instruction trace is capped at 400 entries even when the
+program executes longer. Gadget searches are likewise bounded to keep large inputs responsive.
+
+## Build, test, and deploy
 
 ```sh
-npm test                  # one-shot
-npx vitest                # watch mode while developing
+npm run check    # TypeScript typecheck
+npm test         # Vitest, including real WASM engines and cross-architecture emulation
+npm run build    # production site in dist/
+npm run preview  # serve the production build locally
 ```
 
-CI (`.github/workflows/ci.yml`) runs install → typecheck → test → build on every push/PR and
-uploads `dist/` as an artifact.
+`dist/` is static and uses relative asset paths, so it can be served from a domain root or a
+subpath. The build generates a content-derived service-worker cache name and precaches the app,
+WASM files, and lazy worker/engine chunks. Use `npm run build && npm run preview` to test offline
+behavior; the service worker does not register in Vite's development mode.
 
-## deploying
+GitHub Actions runs typecheck, tests, and build for pushes and pull requests. The Pages workflow
+publishes `main` to the [live demo](https://atulhacks.github.io/clovshell/). For another static
+host, publish the contents of `dist/`.
 
-The build is a plain static bundle with **relative paths** (`base: './'`), so it drops onto any
-host, including subpaths like `user.github.io/clovshell/`:
+## Assembly notes
 
-```sh
-npm run build   # → dist/
-```
+- Write one instruction per line. `;`, `#`, `//`, and ARM `@` comments are stripped before assembly;
+  Keystone's semicolon statement separator is therefore unavailable.
+- Labels resolve through Keystone. GNU numeric local labels (`1:` / `1b`) are not supported.
+- Non-emitting directives such as `.global`, `.type`, `.section`, and `.cfi_*` are ignored.
+  Data-emitting directives such as `.byte`, `.word`, `.quad`, `.ascii`, and `.asciz` are retained.
+  Unrecognized dot-directives are dropped; use `.short` in place of `.hword`.
+- Error-line hints are approximate for forward references. The x86 parser uses Intel-style
+  operands (`mov eax, 1`). On ARM, prefer `movw`/`movt` over Keystone's unreliable
+  `ldr rX, =imm` literal-pool placement.
 
-- **GitHub Pages** — this repo ships a deploy workflow (`.github/workflows/deploy.yml`):
-  every push to `main` builds, tests and publishes to `https://atulhacks.github.io/clovshell/`.
-  The relative base means no 404s under the repo subpath.
-- **Netlify / Vercel / Cloudflare Pages** — build command `npm run build`, publish directory
-  `dist`. No framework preset needed.
-- **nginx / any static file server** — serve `dist/`; add `application/wasm` for `.wasm` if your
-  server doesn't set it (most do).
-- **Railway** — static site service, root directory `/`, output `dist`.
+## Project map
 
-The service worker registers only in production builds, so `vite dev` never fights your cache —
-when testing the PWA locally use `npm run build && npm run preview` and hard-reload between
-changes. The build generates a content-derived cache name and a complete precache list, including
-lazy emulator chunks; no manual cache bump is needed.
+| Path | Purpose |
+| --- | --- |
+| `src/engines.ts`, `src/directives.ts` | WASM assembly/disassembly and source preprocessing |
+| `src/emu.ts`, `src/emu-worker.ts` | Emulation, syscall models, and execution capture |
+| `src/encoder.ts`, `src/gadgets.ts`, `src/gadget-worker.ts` | XOR wrappers and bounded gadget scans |
+| `src/syscalls*.ts`, `src/presets.ts` | Syscall reference, scaffolds, and examples |
+| `src/main.ts`, `src/editor.ts`, `src/ui.ts` | Workbench interface and state |
+| `src/tests/` | Engine and UI-logic regression tests |
+| `scripts/` | WASM copy, syscall-table generation, service-worker finalization |
+| `public/sw.js` | Production offline cache |
 
-## architecture
+The syscall data can be regenerated with `node scripts/gen-syscalls.mjs` using an authenticated
+`gh` CLI. The script caches the kernel sources under `scripts/kernel-src/`.
 
-```
-src/
-  engines.ts        keystone + capstone loading, arch registry, assemble()/disassemble()
-  directives.ts     strips non-emitting assembler directives (some crash keystone's wasm)
-  emu.ts            unicorn engine loading (lazy, per-arch chunks), memory layout, syscall hooks
-  emu-worker.ts     keeps CPU emulation off the UI thread
-  syscalls-data.ts  generated: 1 634 syscall entries from the Linux kernel tables
-  syscalls.ts       searchable syscall panel + per-arch scaffold generator
-  presets.ts        classic shellcode presets
-  encoder.ts        xor encoder + self-decoding stub generation (all four arches)
-  gadgets.ts        ROP gadget finder (sliding-window disassembly)
-  gadget-worker.ts  runs bounded gadget scans off the UI thread
-  hex.ts            lenient hex parsing, formatting, bad-char & null counting
-  formats.ts        the export formatters (python/c/js/powershell/yara…)
-  highlight.ts      tiny per-arch asm syntax highlighter
-  themes.ts         five-palette theme registry, picker + themed favicon (mono is the default)
-  boot.ts           boot loader: engine milestones lock the name-bytes, then the overlay fades
-  editor.ts         textarea + backdrop-highlight + gutter, scroll-synced
-  ui.ts             small DOM helpers (copy, toast, file download)
-  main.ts           app wiring, state, URL sharing
-  tests/            vitest suite (runs the real wasm engines in Node)
-scripts/
-  gen-syscalls.mjs  regenerates syscalls-data.ts from torvalds/linux (via gh api, cached)
-  copy-wasm.mjs     copies keystone/capstone wasm from node_modules into public/wasm/
-  finalize-sw.mjs   injects the full production asset list and cache key into dist/sw.js
-docs/              showcase screenshots used in this README
-public/
-  sw.js             service worker — precaches the shell + engines for full offline use
-  manifest.webmanifest, favicon.svg
-  wasm/             keystone.wasm (4.3 MB) + capstone.wasm (1.8 MB), copied from node_modules
-.github/workflows/ci.yml   typecheck + test + build on every push/PR
-```
+## License
 
-No framework, no runtime dependencies beyond the engines.
-
-**Loading strategy** — first paint ships ~45 kB of JS (gzipped). Keystone + capstone wasm load on
-boot; each unicorn engine (x86 273 kB, ARM 271 kB, ARM64 409 kB gzipped) is a separate lazy chunk
-that only downloads the first time you press ▶ run for that arch.
-
-## quirks worth knowing
-
-- **comments** — `;` (NASM-style), `#`, `//` and — on ARM — `@` all work. Comments are stripped
-  (quote-aware) before the source reaches keystone, so anything inside a comment (unicode, parens,
-  dashes) is safe. Consequence: keystone's native `;` *statement separator* is not available —
-  one instruction per line.
-- **labels** — keystone resolves them itself (branch immediates are absolute addresses from the
-  start of the blob), and capstone prints resolved targets the same way, so `loop:` round-trips
-  through bytes and back. GNU *numeric* local labels (`1:` / `1b`) are not supported by keystone.
-- **directives** — non-emitting assembler directives (`.global`, `.type`, `.section`, `.cfi_*`…)
-  are stripped before assembly: keystone rejects some (`.type` on ARM32) and its wasm build
-  **crashes outright on bare `.text`/`.data`** (section switching touches wasm memory it doesn't
-  own). Data-emitting directives (`.byte`, `.short`, `.word`, `.long`, `.quad`, `.xword`, `.octa`,
-  `.ascii`, `.asciz`, `.string`, `.skip`, `.zero`, `.space`, `.fill`) are kept and emit real
-  bytes. Unrecognized dot-directives are dropped silently — use `.short` where gas would take
-  `.hword`. keystone's own failures are additionally caught in a try/catch so a wasm crash can
-  never take the UI down.
-- **error messages** carry the offending line: `✗ Invalid operand — near line 3: \`mov ebs, …\``.
-  keystone itself reports no position; clovshell re-assembles progressively longer prefixes to find
-  the failing line. It's a hint — a forward reference (`jmp label` before `label:`) can occasionally
-  point one line off.
-- **instruction counts** are derived by disassembling the emitted bytes; keystone's own count is
-  unreliable around comments.
-- keystone's x86 parser is the gas-flavoured one (`mov eax, 1`, intel syntax).
-- MIPS/PPC assemble fine in keystone but the capstone build used here only disassembles x86/ARM
-  families — those arches are deliberately not exposed.
-- **emulation caveats** — unicorn's timeout parameter spawns a QEMU timer thread that aborts under
-  WASM, so clovshell always runs with timeout 0 and enforces its own instruction limit. The syscall
-  emulation is deliberately shallow: file/socket I/O is stubbed (no real bytes are read or sent),
-  and calls without a model return `-ENOSYS`. It is a CPU-and-syscall workbench, not a full Linux VM.
-- ARM's `ldr rX, =imm` literal-pool placement is unreliable in keystone; prefer `movw`/`movt` in
-  shellcode you plan to assemble here.
-
-## regenerating the syscall tables
-
-```sh
-node scripts/gen-syscalls.mjs   # needs `gh` authenticated; kernel sources cached in scripts/kernel-src/
-```
-
-## license notes
-
-- this project is licensed under the **GPL-2.0** (see [LICENSE](LICENSE)).
-- keystone and its JS binding are **GPL-2.0**; unicorn and its JS binding are **GPL-2.0** — the
-  combined work you build and distribute from this repo inherits that.
-- capstone is BSD-3.
-- intended for security research, CTFs and education.
+clovshell is [GPL-2.0](LICENSE). Keystone and Unicorn are GPL-2.0; Capstone is BSD-3-Clause.
