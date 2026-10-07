@@ -51,13 +51,20 @@ no telemetry, no network calls.
   mmap region — nothing touches the host
 - **syscall interception** per arch (x86-64 `syscall`, x86-32 `int 0x80`, ARM/ARM64 `svc`):
   `write` shows the bytes being written, `execve` reads the filename out of emulated memory and
-  stops ("process replaced"), `open`/`socket` hand out fds, `mmap` maps fresh pages, `exit` /
-  `exit_group` report the exit code
+  stops ("process replaced"), `open`/`socket` hand out fds, `mmap`/`mmap2` map bounded pages,
+  `mprotect`/`munmap` update emulated memory,
+  `exit` / `exit_group` report the exit code; unmodeled calls return `-ENOSYS` rather than
+  pretending to succeed
 - **register dump** after the run, with registers the shellcode touched highlighted
+- **execution trace** — inspect the first 400 executed instructions with their runtime bytes
+  (including self-modified code), resolved disassembly addresses, and pre-instruction register
+  snapshots; step with buttons or arrow keys and export the capture as JSON
 - **entry argument** — set the initial value of the first-arg register (`rdi`/`r0`/`x0`)
   before running, so function-style shellcode like `sum_to_n` can be tested with real input
 - **fault reporting** — unmapped reads/writes/fetches stop emulation with the faulting address;
   runaway loops hit a 100 000-instruction limit instead of hanging the tab
+- emulation runs in a dedicated worker, with a 30-second outer timeout, so a slow payload cannot
+  block editor interaction
 - shellcodes that `ret` land on a `ud2` sentinel — a clean stop instead of executing garbage
 
 ### xor encoder 🆕
@@ -79,6 +86,8 @@ no telemetry, no network calls.
   capstone slides over the byte stream from *every* offset (not just instruction boundaries) and
   keeps short sequences (≤ 8 insns) ending in a control-flow instruction
 - deduplicated by instruction text, capped at 400 gadgets, filter box, click a row to copy it
+- the scan decodes at most eight instructions per offset in a worker; ARM data instructions only
+  count as terminators when they actually write `pc`
 
 ### reference
 
@@ -116,7 +125,8 @@ no telemetry, no network calls.
 - shareable URLs (`share ↗` encodes source + arch in the hash), state restored from localStorage
 - `ctrl/cmd + ⏎` to assemble (or disassemble, from the hex box)
 - **installable PWA** 🆕 — manifest + service worker: the whole workbench (shell, engines,
-  emulation chunks) caches on first visit and then works **fully offline**; "install" it from
+  emulation chunks) is precached when the service worker installs, then works **fully offline**;
+  "install" it from
   your browser and it opens as its own app with zero network
 - responsive down to phone widths — every panel stacks, nothing scrolls sideways
 
@@ -125,7 +135,7 @@ no telemetry, no network calls.
 ```sh
 npm install     # also copies engine wasm into public/wasm/ (postinstall)
 npm run dev     # http://localhost:5173
-npm test        # vitest suite (112 tests) — assembles/disassembles through the real wasm engines
+npm test        # vitest suite — tests the real assembler, disassembler and emulator engines
 npm run check   # typescript, no emit
 npm run build   # static site in dist/ — host it anywhere
 npm run preview # serve the production build locally
@@ -175,7 +185,8 @@ npm run build   # → dist/
 
 The service worker registers only in production builds, so `vite dev` never fights your cache —
 when testing the PWA locally use `npm run build && npm run preview` and hard-reload between
-changes. To ship a new version, bump the `CACHE` name in `public/sw.js` so clients refresh.
+changes. The build generates a content-derived cache name and a complete precache list, including
+lazy emulator chunks; no manual cache bump is needed.
 
 ## architecture
 
@@ -184,11 +195,13 @@ src/
   engines.ts        keystone + capstone loading, arch registry, assemble()/disassemble()
   directives.ts     strips non-emitting assembler directives (some crash keystone's wasm)
   emu.ts            unicorn engine loading (lazy, per-arch chunks), memory layout, syscall hooks
+  emu-worker.ts     keeps CPU emulation off the UI thread
   syscalls-data.ts  generated: 1 634 syscall entries from the Linux kernel tables
   syscalls.ts       searchable syscall panel + per-arch scaffold generator
   presets.ts        classic shellcode presets
   encoder.ts        xor encoder + self-decoding stub generation (all four arches)
   gadgets.ts        ROP gadget finder (sliding-window disassembly)
+  gadget-worker.ts  runs bounded gadget scans off the UI thread
   hex.ts            lenient hex parsing, formatting, bad-char & null counting
   formats.ts        the export formatters (python/c/js/powershell/yara…)
   highlight.ts      tiny per-arch asm syntax highlighter
@@ -201,6 +214,7 @@ src/
 scripts/
   gen-syscalls.mjs  regenerates syscalls-data.ts from torvalds/linux (via gh api, cached)
   copy-wasm.mjs     copies keystone/capstone wasm from node_modules into public/wasm/
+  finalize-sw.mjs   injects the full production asset list and cache key into dist/sw.js
 docs/              showcase screenshots used in this README
 public/
   sw.js             service worker — precaches the shell + engines for full offline use
@@ -211,7 +225,7 @@ public/
 
 No framework, no runtime dependencies beyond the engines.
 
-**Loading strategy** — first paint ships ~40 kB of JS (gzipped). Keystone + capstone wasm load on
+**Loading strategy** — first paint ships ~45 kB of JS (gzipped). Keystone + capstone wasm load on
 boot; each unicorn engine (x86 273 kB, ARM 271 kB, ARM64 409 kB gzipped) is a separate lazy chunk
 that only downloads the first time you press ▶ run for that arch.
 
@@ -244,7 +258,7 @@ that only downloads the first time you press ▶ run for that arch.
 - **emulation caveats** — unicorn's timeout parameter spawns a QEMU timer thread that aborts under
   WASM, so clovshell always runs with timeout 0 and enforces its own instruction limit. The syscall
   emulation is deliberately shallow: file/socket I/O is stubbed (no real bytes are read or sent),
-  which is exactly what you want for a public tool.
+  and calls without a model return `-ENOSYS`. It is a CPU-and-syscall workbench, not a full Linux VM.
 - ARM's `ldr rX, =imm` literal-pool placement is unreliable in keystone; prefer `movw`/`movt` in
   shellcode you plan to assemble here.
 

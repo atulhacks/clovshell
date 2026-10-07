@@ -14,6 +14,7 @@ import {
   countNullBytes,
   describeBadChars,
   formatAddress,
+  MAX_HEX_BYTES,
   parseBadChars,
   parseHexInput,
   toHex,
@@ -22,9 +23,10 @@ import {
 import { FORMATS } from './formats';
 import { highlightInstruction } from './highlight';
 import { createEditor, editorTemplate } from './editor';
-import { runEmulation, preloadEmu, entryArgReg } from './emu';
+import { entryArgReg } from './emu';
+import type { EmuResult } from './emu';
 import { xorEncode } from './encoder';
-import { findGadgets, gadgetRows } from './gadgets';
+import { gadgetRows } from './gadgets';
 import type { Gadget } from './gadgets';
 import { createSyscallPanel, syscallScaffold } from './syscalls';
 import { PRESETS } from './presets';
@@ -36,6 +38,7 @@ import {
 } from './ui';
 
 const STORAGE_KEY = 'clovshell:v1';
+const MAX_ASM_CHARS = 64 * 1024;
 
 const SAMPLE = `; clovshell — assemble me (ctrl/cmd + enter)
 mov eax, 0x64696b73
@@ -49,6 +52,21 @@ let archId = 'x86-64';
 let currentBytes: Uint8Array | null = null; // drives the exports section
 let currentBytesSource: 'assembler' | 'hex input' | null = null;
 let lastAssembled: Uint8Array | null = null;
+
+function clearBytesFrom(source: 'assembler' | 'hex input'): void {
+  if (currentBytesSource !== source) return;
+  currentBytes = null;
+  currentBytesSource = null;
+  invalidateDerivedViews();
+  renderExports();
+}
+
+function setCurrentBytes(bytes: Uint8Array, source: 'assembler' | 'hex input'): void {
+  currentBytes = bytes;
+  currentBytesSource = source;
+  invalidateDerivedViews();
+  renderExports();
+}
 
 // --- elements ----------------------------------------------------------------
 
@@ -71,6 +89,15 @@ const fatalMsg = $('#fatal-msg');
 const emuLog = $('#emu-log');
 const emuRegs = $('#emu-regs');
 const emuMsg = $('#emu-msg');
+const tracePanel = $('#trace-panel');
+const traceStats = $('#trace-stats');
+const traceList = $('#trace-list');
+const traceRegisters = $('#trace-registers');
+const traceSelected = $('#trace-selected');
+const tracePosition = $('#trace-position');
+const tracePrev = $<HTMLButtonElement>('#trace-prev');
+const traceNext = $<HTMLButtonElement>('#trace-next');
+const traceDownload = $<HTMLButtonElement>('#trace-download');
 const btnRunEmu = $<HTMLButtonElement>('#btn-run-emu');
 const emuArgInput = $<HTMLInputElement>('#emu-arg');
 const emuArgLabel = $('#emu-arg-label');
@@ -243,18 +270,22 @@ function runAssemble(): void {
   const src = editor.getValue().trim();
   if (!src) {
     lastAssembled = null;
-    currentBytes = null;
-    currentBytesSource = null;
+    clearBytesFrom('assembler');
     renderShellcode(null, 0);
     setMsg(asmMsg, '', '');
-    renderExports();
+    return;
+  }
+  if (src.length > MAX_ASM_CHARS) {
+    lastAssembled = null;
+    clearBytesFrom('assembler');
+    renderShellcode(null, 0, true);
+    setMsg(asmMsg, `✗ assembly source exceeds the ${MAX_ASM_CHARS}-character limit`, 'err');
     return;
   }
   const res = assemble(archId, src);
   if (res.ok && res.bytes) {
     lastAssembled = res.bytes;
-    currentBytes = res.bytes;
-    currentBytesSource = 'assembler';
+    setCurrentBytes(res.bytes, 'assembler');
     // keystone's instruction count is unreliable around comments —
     // count real instructions by disassembling the emitted bytes
     const dis = disassemble(archId, res.bytes);
@@ -269,6 +300,7 @@ function runAssemble(): void {
     );
   } else {
     lastAssembled = null;
+    clearBytesFrom('assembler');
     renderShellcode(null, 0, true);
     const where = res.errorLine
       ? ` — near line ${res.errorLine}${res.errorSource ? `: \`${res.errorSource}\`` : ''}`
@@ -286,11 +318,17 @@ function runDisassemble(): void {
   }
   const parsed = parseHexInput(text);
   if (parsed.error) {
+    clearBytesFrom('hex input');
     setMsg(hexMsg, `✗ ${parsed.error}`, 'err');
     renderDisassembly({ ok: false, insns: [], error: parsed.error, consumed: 0, total: 0 });
     return;
   }
   const bytes = parsed.bytes;
+  if (bytes.length === 0) {
+    disassembleClear();
+    return;
+  }
+  setCurrentBytes(bytes, 'hex input');
   const res = disassemble(archId, bytes);
   renderDisassembly(res);
   if (!res.ok) {
@@ -303,14 +341,10 @@ function runDisassemble(): void {
   } else {
     setMsg(hexMsg, `✓ decoded ${res.insns.length} instruction${res.insns.length === 1 ? '' : 's'}`, 'ok');
   }
-  if (bytes.length > 0) {
-    currentBytes = bytes;
-    currentBytesSource = 'hex input';
-    renderExports();
-  }
 }
 
 function disassembleClear(): void {
+  clearBytesFrom('hex input');
   renderDisassembly({ ok: true, insns: [], error: null, consumed: 0, total: 0 });
   setMsg(hexMsg, '', '');
 }
@@ -320,7 +354,116 @@ function disassembleClear(): void {
 const EMU_PLACEHOLDER =
   '// press ▶ run to execute the assembled shellcode\n// under the unicorn engine — syscalls, buffers and exit state appear here';
 
-function renderEmu(result: Awaited<ReturnType<typeof runEmulation>> | null): void {
+let activeTrace: EmuResult | null = null;
+let traceArch = '';
+let selectedTraceStep = 0;
+let traceRows: HTMLButtonElement[] = [];
+let traceInstructions: string[] = [];
+
+function selectTraceStep(index: number, focus = false): void {
+  if (!activeTrace || index < 0 || index >= activeTrace.trace.length) return;
+  traceRows[selectedTraceStep]?.classList.remove('active');
+  traceRows[selectedTraceStep]?.removeAttribute('aria-current');
+  selectedTraceStep = index;
+  const row = traceRows[index]!;
+  row.classList.add('active');
+  row.setAttribute('aria-current', 'step');
+  tracePosition.textContent = `${index + 1} / ${activeTrace.trace.length}`;
+  tracePrev.disabled = index === 0;
+  traceNext.disabled = index === activeTrace.trace.length - 1;
+  if (focus) {
+    row.focus();
+    row.scrollIntoView({ block: 'nearest' });
+  }
+
+  const step = activeTrace.trace[index]!;
+  const prior = activeTrace.trace[index - 1];
+  traceSelected.replaceChildren(
+    el('div', {},
+      el('span', { class: 'trace-address' }, formatAddress(step.addr)),
+      ' · ',
+      el('span', { class: 'trace-bytes' }, toSpacedHex(step.bytes) || 'bytes unavailable')),
+    el('div', {}, traceInstructions[index] ?? '(undecoded)'),
+  );
+  traceRegisters.replaceChildren();
+  for (const [i, reg] of activeTrace.registers.entries()) {
+    const value = step.registers[i] ?? '—';
+    const changed = prior != null && prior.registers[i] !== value;
+    traceRegisters.append(
+      el('div', { class: 'emu-reg' + (changed ? ' changed' : '') },
+        el('span', { class: 'emu-reg-name' }, reg.name),
+        el('span', { class: 'emu-reg-val' }, value)),
+    );
+  }
+}
+
+function renderTrace(result: EmuResult | null): void {
+  activeTrace = result;
+  tracePanel.classList.toggle('hidden', !result || result.trace.length === 0);
+  traceList.replaceChildren();
+  traceRegisters.replaceChildren();
+  traceSelected.replaceChildren();
+  traceRows = [];
+  traceInstructions = [];
+  if (!result || result.trace.length === 0) return;
+
+  traceArch = archId;
+  traceStats.textContent = result.traceTruncated
+    ? `first ${result.trace.length} of ${result.steps} instructions captured`
+    : `${result.trace.length} instructions captured`;
+  const fragment = document.createDocumentFragment();
+  for (const [index, step] of result.trace.entries()) {
+    const decoded = step.bytes.length ? disassemble(traceArch, step.bytes, 1, step.addr) : null;
+    const insn = decoded?.insns[0];
+    const text = insn ? `${insn.mnemonic} ${insn.opStr}`.trim() : '(undecoded)';
+    traceInstructions.push(text);
+    const row = el('button', { class: 'trace-row', type: 'button', title: text,
+      'aria-label': `Instruction ${index + 1} at ${formatAddress(step.addr)}: ${text}` },
+      el('span', { class: 'trace-num' }, String(index + 1)),
+      el('span', { class: 'trace-address' }, formatAddress(step.addr)),
+      el('span', { class: 'trace-bytes' }, toSpacedHex(step.bytes) || '—'),
+      el('span', { class: 'trace-insn' }, text),
+    );
+    row.addEventListener('click', () => selectTraceStep(index));
+    fragment.append(row);
+    traceRows.push(row);
+  }
+  traceList.append(fragment);
+  selectedTraceStep = 0;
+  selectTraceStep(0);
+}
+
+tracePrev.addEventListener('click', () => selectTraceStep(selectedTraceStep - 1, true));
+traceNext.addEventListener('click', () => selectTraceStep(selectedTraceStep + 1, true));
+traceList.addEventListener('keydown', (event) => {
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    selectTraceStep(selectedTraceStep + (event.key === 'ArrowDown' ? 1 : -1), true);
+  }
+});
+traceDownload.addEventListener('click', () => {
+  if (!activeTrace) return;
+  const names = activeTrace.registers.map((reg) => reg.name);
+  const data = {
+    architecture: traceArch,
+    steps: activeTrace.steps,
+    traceTruncated: activeTrace.traceTruncated,
+    exit: activeTrace.exit,
+    syscalls: activeTrace.syscalls,
+    finalRegisters: Object.fromEntries(activeTrace.registers.map((reg) => [reg.name, reg.value])),
+    trace: activeTrace.trace.map((step, index) => ({
+      number: index + 1,
+      address: formatAddress(step.addr),
+      bytes: toHex(step.bytes),
+      instruction: traceInstructions[index],
+      registersBefore: Object.fromEntries(names.map((name, i) => [name, step.registers[i]])),
+    })),
+  };
+  downloadText(`trace-${traceArch}.json`, JSON.stringify(data, null, 2), 'application/json');
+});
+
+function renderEmu(result: EmuResult | null): void {
+  renderTrace(result);
   if (!result) {
     emuLog.replaceChildren(el('div', { class: 'listing-empty' }, EMU_PLACEHOLDER));
     emuRegs.replaceChildren();
@@ -353,16 +496,51 @@ function renderEmu(result: Awaited<ReturnType<typeof runEmulation>> | null): voi
 }
 
 let emuBusy = false;
+
+function runEmulationInWorker(arch: string, bytes: Uint8Array, entryArg: bigint | null): Promise<EmuResult> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./emu-worker.ts', import.meta.url), { type: 'module' });
+    const timer = setTimeout(() => {
+      worker.terminate();
+      reject(new Error('emulation timed out after 30 seconds'));
+    }, 30_000);
+    const finish = (): void => {
+      clearTimeout(timer);
+      worker.terminate();
+    };
+    worker.onmessage = (event: MessageEvent<{ result?: EmuResult; error?: string }>) => {
+      finish();
+      if (event.data.result) resolve(event.data.result);
+      else reject(new Error(event.data.error ?? 'emulation worker failed'));
+    };
+    worker.onerror = (event) => {
+      finish();
+      reject(new Error(event.message || 'emulation worker failed'));
+    };
+    const copy = bytes.slice();
+    worker.postMessage({ archId: arch, bytes: copy, entryArg }, [copy.buffer]);
+  });
+}
+
 async function runEmu(): Promise<void> {
   if (emuBusy) return;
   const src = editor.getValue().trim();
+  const runArch = archId;
   if (!src) {
     toast('nothing to run — the editor is empty');
     return;
   }
-  const res = assemble(archId, src);
+  if (src.length > MAX_ASM_CHARS) {
+    toast(`assembly source exceeds the ${MAX_ASM_CHARS}-character limit`);
+    return;
+  }
+  const res = assemble(runArch, src);
   if (!res.ok || !res.bytes) {
     toast('fix the assembly errors first');
+    return;
+  }
+  if (res.bytes.length === 0) {
+    toast('source emits no bytes');
     return;
   }
   emuBusy = true;
@@ -370,17 +548,20 @@ async function runEmu(): Promise<void> {
   btnRunEmu.textContent = '… running';
   setMsg(emuMsg, 'loading unicorn engine (first run downloads ~1 MB)…', '');
   try {
-    await preloadEmu(archId);
-    setChip(chipUnicorn, 'ok');
     const arg = parseEntryArg();
     if (arg && 'error' in arg) {
       setMsg(emuMsg, `✗ ${arg.error}`, 'err');
       return;
     }
-    const result = await runEmulation(archId, res.bytes, arg ? arg.value : null);
-    renderEmu(result);
+    const result = await runEmulationInWorker(runArch, res.bytes, arg ? arg.value : null);
+    if (archId === runArch && editor.getValue().trim() === src) {
+      setChip(chipUnicorn, 'ok');
+      renderEmu(result);
+    }
   } catch (err) {
-    setMsg(emuMsg, `✗ ${err instanceof Error ? err.message : String(err)}`, 'err');
+    if (archId === runArch && editor.getValue().trim() === src) {
+      setMsg(emuMsg, `✗ ${err instanceof Error ? err.message : String(err)}`, 'err');
+    }
   } finally {
     emuBusy = false;
     btnRunEmu.disabled = false;
@@ -465,6 +646,9 @@ function runEncode(): void {
   }
   const res = xorEncode(archId, bytes, key);
   if ('error' in res) {
+    encPreview.textContent = '// no decoder generated';
+    encPreview.classList.add('empty');
+    encNote.textContent = '';
     setMsg(encMsg, `✗ ${res.error}`, 'err');
     return;
   }
@@ -540,7 +724,21 @@ const gadgetsPanel = $('#gadgets-panel');
 const gadgetList = $('#gadget-list');
 const gadgetStats = $('#gadget-stats');
 const gadgetFilter = $<HTMLInputElement>('#gadget-filter');
+const btnGadgets = $<HTMLButtonElement>('#btn-gadgets');
 let currentGadgets: Gadget[] = [];
+let gadgetGeneration = 0;
+
+function invalidateDerivedViews(): void {
+  gadgetGeneration++;
+  encodedSource = null;
+  encPreview.textContent = '// the decoder stub + encoded payload appear here';
+  encPreview.classList.add('empty');
+  encNote.textContent = '';
+  setMsg(encMsg, '', '');
+  currentGadgets = [];
+  gadgetsPanel.classList.add('hidden');
+  gadgetFilter.value = '';
+}
 
 function renderGadgetList(): void {
   const q = gadgetFilter.value.trim().toLowerCase();
@@ -570,27 +768,70 @@ function renderGadgetList(): void {
   gadgetStats.textContent = `${shown.length}${q && shown.length !== currentGadgets.length ? ` of ${currentGadgets.length}` : ''} gadgets`;
 }
 
-function runGadgets(): void {
+function findGadgetsInWorker(arch: string, bytes: Uint8Array): Promise<Gadget[]> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./gadget-worker.ts', import.meta.url), { type: 'module' });
+    const timer = setTimeout(() => {
+      worker.terminate();
+      reject(new Error('gadget scan timed out after 30 seconds'));
+    }, 30_000);
+    const finish = (): void => {
+      clearTimeout(timer);
+      worker.terminate();
+    };
+    worker.onmessage = (event: MessageEvent<{ gadgets?: Gadget[]; error?: string }>) => {
+      finish();
+      if (event.data.gadgets) resolve(event.data.gadgets);
+      else reject(new Error(event.data.error ?? 'gadget worker failed'));
+    };
+    worker.onerror = (event) => {
+      finish();
+      reject(new Error(event.message || 'gadget worker failed'));
+    };
+    const copy = bytes.slice();
+    worker.postMessage({ archId: arch, bytes: copy, baseURI: document.baseURI }, [copy.buffer]);
+  });
+}
+
+async function runGadgets(): Promise<void> {
+  if (btnGadgets.disabled) return;
   // scan whatever is in the hex box; fall back to the assembled bytes
   let bytes: Uint8Array | null = null;
-  const parsed = parseHexInput(hexInput.value);
-  if (!parsed.error && parsed.bytes.length > 0) bytes = parsed.bytes;
-  else if (lastAssembled && lastAssembled.length > 0) bytes = lastAssembled;
+  if (hexInput.value.trim()) {
+    const parsed = parseHexInput(hexInput.value);
+    if (parsed.error) {
+      setMsg(hexMsg, `✗ ${parsed.error}`, 'err');
+      return;
+    }
+    bytes = parsed.bytes;
+  } else if (lastAssembled && lastAssembled.length > 0) {
+    bytes = lastAssembled;
+  }
   if (!bytes) {
     toast('nothing to scan — paste hex bytes or assemble something');
     return;
   }
-  const res = findGadgets(archId, bytes);
-  if ('error' in res) {
-    setMsg(hexMsg, `✗ ${res.error}`, 'err');
-    return;
+  const runArch = archId;
+  const generation = gadgetGeneration;
+  btnGadgets.disabled = true;
+  setMsg(hexMsg, 'scanning for gadgets…', '');
+  try {
+    const res = await findGadgetsInWorker(runArch, bytes);
+    if (generation !== gadgetGeneration || archId !== runArch) return;
+    currentGadgets = res;
+    gadgetsPanel.classList.remove('hidden');
+    renderGadgetList();
+    setMsg(hexMsg, `✓ found ${res.length} gadgets`, 'ok');
+  } catch (error) {
+    if (generation === gadgetGeneration && archId === runArch) {
+      setMsg(hexMsg, `✗ ${error instanceof Error ? error.message : String(error)}`, 'err');
+    }
+  } finally {
+    btnGadgets.disabled = false;
   }
-  currentGadgets = res;
-  gadgetsPanel.classList.remove('hidden');
-  renderGadgetList();
 }
 
-$('#btn-gadgets').addEventListener('click', runGadgets);
+btnGadgets.addEventListener('click', () => void runGadgets());
 gadgetFilter.addEventListener('input', renderGadgetList);
 $('#btn-gadgets-copy').addEventListener('click', async () => {
   if (currentGadgets.length === 0) {
@@ -604,13 +845,21 @@ $('#btn-gadgets-copy').addEventListener('click', async () => {
 // --- drag & drop a file in --------------------------------------------------------
 
 function readDroppedFile(file: File): void {
-  if (/\.(asm|s|S)$/i.test(file.name) && file.size < 64 * 1024) {
+  if (/\.(asm|s)$/i.test(file.name)) {
+    if (file.size > MAX_ASM_CHARS) {
+      toast(`assembly file exceeds the ${MAX_ASM_CHARS}-byte limit`);
+      return;
+    }
     void file.text().then((src) => {
       editor.setValue(src);
       runAssemble();
       saveState();
       toast(`${file.name} → loaded into the editor`);
     });
+    return;
+  }
+  if (file.size > MAX_HEX_BYTES) {
+    toast(`binary file exceeds the ${MAX_HEX_BYTES}-byte limit`);
     return;
   }
   void file.arrayBuffer().then((buf) => {
@@ -725,11 +974,14 @@ const autoDisassemble = debounce(() => {
 
 editor.onChange(() => {
   saveState();
+  renderEmu(null);
+  invalidateDerivedViews();
   autoAssemble();
 });
 
 hexInput.addEventListener('input', () => {
   saveState();
+  invalidateDerivedViews();
   autoDisassemble();
 });
 
@@ -739,6 +991,7 @@ btnDisassemble.addEventListener('click', runDisassemble);
 $('#btn-clear-asm').addEventListener('click', () => {
   editor.setValue('');
   runAssemble();
+  renderEmu(null);
   saveState();
 });
 
@@ -770,6 +1023,7 @@ $('#btn-copy-shellcode').addEventListener('click', async () => {
 
 archSelect.addEventListener('change', () => {
   archId = archSelect.value;
+  invalidateDerivedViews();
   editor.setArch(getArch(archId));
   saveState();
   updateEmuArgUi();
@@ -792,7 +1046,12 @@ document.addEventListener('keydown', (e) => {
 });
 
 $('#btn-share').addEventListener('click', async () => {
-  const hash = '#s=' + encodeState({ a: editor.getValue(), h: hexInput.value, arch: archId, bc: badCharsInput.value });
+  const shared = { a: editor.getValue(), h: hexInput.value, arch: archId, bc: badCharsInput.value };
+  if (new TextEncoder().encode(JSON.stringify(shared)).length > 8192) {
+    toast('state is too large for a reliable share link');
+    return;
+  }
+  const hash = '#s=' + encodeState(shared);
   const url = location.origin + location.pathname + hash;
   history.replaceState(null, '', hash);
   if (await copyText(url)) toast('share link copied to clipboard');
@@ -839,8 +1098,8 @@ function loadState(): void {
     archSelect.value = archId;
     editor.setArch(getArch(archId));
   }
-  if (typeof state.a === 'string' && state.a.trim()) editor.setValue(state.a);
-  if (typeof state.h === 'string') hexInput.value = state.h;
+  if (typeof state.a === 'string' && state.a.trim() && state.a.length <= MAX_ASM_CHARS) editor.setValue(state.a);
+  if (typeof state.h === 'string' && state.h.length <= MAX_HEX_BYTES * 4) hexInput.value = state.h;
   if (typeof state.bc === 'string') badCharsInput.value = state.bc;
 }
 
@@ -861,6 +1120,8 @@ disassembleClear();
 renderExports();
 loadState();
 updateEmuArgUi();
+($('#syscall-list') as HTMLElement & { __setArch?: (id: string) => void }).__setArch?.(archId);
+renderPresets();
 applyBadChars();
 
 initEngines((stage) => bootStage(stage))

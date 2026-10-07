@@ -114,7 +114,8 @@ describe('boot loader styling', () => {
     expect(reduce).toContain('.boot-status::after { animation: none;');
   });
 
-  it('service worker cache is bumped past the loader-less build', () => {
-    expect(read('public/sw.js')).toContain("CACHE = 'clovshell-v1.2'");
+  it('service worker cache is derived from the built assets', () => {
+    expect(read('public/sw.js')).toContain("CACHE = '__BUILD_CACHE__'");
+    expect(read('scripts/finalize-sw.mjs')).toContain('PRECACHE_ASSETS');
   });
 });

@@ -1,25 +1,20 @@
-// clovshell service worker: cache-first for engine wasm + hashed assets,
-// network-first for the app shell so deploys show up on the next reload.
-// The engines are ~7 MB — caching them is what makes "works offline" real.
+// clovshell service worker: all build assets (including lazy emulator chunks)
+// are precached at install. The build script injects a content-derived cache
+// name and a complete asset list into this template.
 //
 // ignoreVary everywhere: the dev/preview server tags assets with
 // `Vary: Origin`, which would make an entry stored by one fetch mode
 // (plain SW fetch, no Origin header) invisible to another (module script,
 // with Origin) — every lookup here is same-origin, so Vary is noise.
 
-const CACHE = 'clovshell-v1.2';
+const CACHE = '__BUILD_CACHE__';
+const PRECACHE_ASSETS = [];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE);
-      // precache the app shell + the two stable-named engine wasm files so
-      // the very first offline reload works — the document that installed
-      // this worker was fetched before the worker controlled the page, so
-      // it is not in the cache otherwise
-      await cache
-        .addAll(['./', './index.html', './manifest.webmanifest', './favicon.svg', './wasm/keystone.wasm', './wasm/capstone.wasm'])
-        .catch(() => {});
+      await cache.addAll(PRECACHE_ASSETS);
       await self.skipWaiting();
     })(),
   );
@@ -29,7 +24,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       for (const key of await caches.keys()) {
-        if (key !== CACHE) await caches.delete(key);
+        if (key.startsWith('clovshell-') && key !== CACHE) await caches.delete(key);
       }
       await self.clients.claim();
     })(),
@@ -46,11 +41,13 @@ self.addEventListener('message', (event) => {
       const cache = await caches.open(CACHE);
       await Promise.all(
         urls.map(async (url) => {
-          if (typeof url !== 'string' || !url.startsWith(self.location.origin)) return;
+          if (typeof url !== 'string') return;
+          const parsed = new URL(url, self.registration.scope);
+          if (parsed.origin !== self.location.origin || !parsed.href.startsWith(self.registration.scope)) return;
           if (await cache.match(url, { ignoreVary: true })) return;
           try {
-            const res = await fetch(url);
-            if (res.ok) await cache.put(url, res);
+            const res = await fetch(parsed.href);
+            if (res.ok) await cache.put(parsed.href, res);
           } catch {
             /* best-effort */
           }

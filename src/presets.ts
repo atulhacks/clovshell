@@ -1,5 +1,4 @@
-// Ready-to-load shellcode presets. Every source is null-free and verified by
-// the browser test drive (assemble → emulate round-trip).
+// Ready-to-load shellcode presets. Size and null-free claims are checked by tests.
 
 export interface Preset {
   id: string;
@@ -35,7 +34,7 @@ syscall`,
     id: 'exit-x64',
     label: 'exit(42)',
     arch: 'x86-64',
-    note: '12 B',
+    note: '16 B',
     src: `; exit(42) — x86-64
 mov rdi, 42
 mov rax, 60
@@ -59,7 +58,7 @@ int 0x80`,
     id: 'exit-x32',
     label: 'exit(0)',
     arch: 'x86-32',
-    note: '8 B',
+    note: '6 B',
     src: `; exit(0) — x86-32
 xor ebx, ebx
 mov al, 1
@@ -69,7 +68,7 @@ int 0x80`,
     id: 'exit-arm',
     label: 'exit(0)',
     arch: 'arm',
-    note: '8 B',
+    note: '12 B',
     src: `; exit(0) — ARM EABI
 mov r7, #1
 mov r0, #0
@@ -79,7 +78,7 @@ svc 0`,
     id: 'exit-arm64',
     label: 'exit_group(0)',
     arch: 'arm64',
-    note: '8 B',
+    note: '12 B',
     src: `; exit_group(0) — ARM64
 mov x8, #94
 mov x0, #0

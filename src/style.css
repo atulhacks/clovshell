@@ -1147,6 +1147,98 @@ body.dragging::after {
 
 .emu-reg.changed .emu-reg-val { color: var(--accent); }
 
+.trace-panel {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+
+.trace-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.trace-head .emu-sub { margin-bottom: 3px; }
+
+.trace-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.trace-position {
+  min-width: 8ch;
+  text-align: center;
+  font: 11px var(--mono);
+  color: var(--fg-dim);
+}
+
+.trace-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(220px, 1fr);
+}
+
+.trace-list {
+  max-height: 350px;
+  min-height: 170px;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+}
+
+.trace-row {
+  display: grid;
+  grid-template-columns: 4ch 10ch minmax(9ch, 1fr) minmax(10ch, 1.4fr);
+  gap: 9px;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  text-align: left;
+  font: 11px var(--mono);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.trace-row:hover, .trace-row:focus-visible { background: var(--bg-hover); }
+.trace-row.active { background: var(--accent-soft); box-shadow: inset 2px 0 var(--accent); }
+.trace-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-row .trace-num { color: var(--fg-dim); }
+.trace-row .trace-address { color: var(--accent); }
+.trace-row .trace-bytes { color: var(--fg-dim); }
+
+.trace-detail { padding: 10px 12px; min-width: 0; }
+.trace-selected {
+  margin-bottom: 12px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  font: 11px/1.6 var(--mono);
+  overflow-wrap: anywhere;
+}
+.trace-selected .trace-address { color: var(--accent); }
+.trace-selected .trace-bytes { color: var(--fg-dim); }
+.trace-registers { max-height: 310px; }
+
+@media (max-width: 860px) {
+  .trace-grid { grid-template-columns: 1fr; }
+  .trace-list { border-right: 0; border-bottom: 1px solid var(--border); max-height: 250px; }
+  .trace-head { align-items: flex-start; flex-direction: column; }
+}
+
+@media (max-width: 540px) {
+  .trace-row { grid-template-columns: 3ch 8ch minmax(8ch, 1fr); }
+  .trace-row .trace-bytes { display: none; }
+}
+
 /* ------------------------------------------------------------------ emulation */
 
 .emu-arg {

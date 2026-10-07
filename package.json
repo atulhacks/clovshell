@@ -8,7 +8,7 @@
   "scripts": {
     "postinstall": "node scripts/copy-wasm.mjs",
     "dev": "node scripts/copy-wasm.mjs && vite",
-    "build": "node scripts/copy-wasm.mjs && vite build",
+    "build": "node scripts/copy-wasm.mjs && vite build && node scripts/finalize-sw.mjs",
     "preview": "vite preview",
     "check": "tsc --noEmit",
     "test": "vitest run"

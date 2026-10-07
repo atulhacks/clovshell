@@ -42,12 +42,26 @@ describe('PRESETS', () => {
     }
   });
 
-  it('syscall-referencing scaffolds assemble for their arch', () => {
-    for (const arch of ['x86-64', 'x86-32', 'arm', 'arm64']) {
-      const write = tableFor(arch).find((e) => e.name === 'write')!;
-      const scaffold = syscallScaffold(arch, write);
-      const res = assemble(arch, scaffold);
-      expect(res.ok, `${arch}: ${res.error} — ${scaffold}`).toBe(true);
+  it('advertised byte lengths match assembled bytes', () => {
+    const mismatches: string[] = [];
+    for (const p of PRESETS) {
+      const advertised = Number(p.note.match(/^(\d+) B/)?.[1]);
+      expect(advertised, `${p.id} has no size claim`).toBeGreaterThan(0);
+      const actual = assemble(p.arch, p.src).bytes?.length;
+      if (actual !== advertised) mismatches.push(`${p.id}: ${advertised} B advertised, ${actual} B assembled`);
     }
+    expect(mismatches).toEqual([]);
+  });
+
+  it('every syscall scaffold assembles for its arch', () => {
+    const failures: string[] = [];
+    for (const arch of ['x86-64', 'x86-32', 'arm', 'arm64']) {
+      for (const entry of tableFor(arch)) {
+        const scaffold = syscallScaffold(arch, entry);
+        const res = assemble(arch, scaffold);
+        if (!res.ok) failures.push(`${arch} ${entry.num} ${entry.name}: ${res.error}`);
+      }
+    }
+    expect(failures).toEqual([]);
   });
 });

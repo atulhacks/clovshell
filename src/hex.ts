@@ -5,6 +5,8 @@ export interface HexParseResult {
   error: string | null;
 }
 
+export const MAX_HEX_BYTES = 64 * 1024;
+
 /**
  * Lenient hex parser for the disassembly input box.
  * Accepts (and ignores) whitespace, commas, colons and dashes, strips
@@ -14,6 +16,9 @@ export interface HexParseResult {
  *   "b8736b6964"  "b8 73 6b 69 64"  "\\xb8\\x73..."  "0xb8, 0x73"
  */
 export function parseHexInput(text: string): HexParseResult {
+  if (text.length > MAX_HEX_BYTES * 4) {
+    return { bytes: new Uint8Array(0), error: `hex input exceeds the ${MAX_HEX_BYTES}-byte limit` };
+  }
   // expand \xNN escapes into plain hex pairs first
   let s = text.replace(/\\x([0-9a-fA-F]{2})/g, (_m, h: string) => h);
   // strip 0x / 0X prefixes
@@ -22,6 +27,9 @@ export function parseHexInput(text: string): HexParseResult {
   s = s.replace(/[\s,;:.\-]+/g, '');
 
   if (s.length === 0) return { bytes: new Uint8Array(0), error: null };
+  if (s.length > MAX_HEX_BYTES * 2) {
+    return { bytes: new Uint8Array(0), error: `hex input exceeds the ${MAX_HEX_BYTES}-byte limit` };
+  }
 
   const bad = s.match(/[^0-9a-fA-F]/);
   if (bad && bad.index !== undefined) {

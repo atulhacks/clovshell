@@ -63,6 +63,10 @@ export interface EmuReg {
 export interface EmuStep {
   addr: number;
   size: number;
+  /** bytes as fetched before execution, including self-modified code */
+  bytes: Uint8Array;
+  /** register values before this instruction, ordered like EmuResult.registers */
+  registers: string[];
 }
 
 export interface EmuResult {
@@ -109,6 +113,7 @@ interface ArchGlue {
   regs: Record<string, number>;
   regOrder: string[];
   syscallNumReg: string;
+  returnReg: string;
   argRegs: string[];
   /** register carrying the first argument (SysV ABI) — x86-32 takes args on the stack */
   argReg: string | null;
@@ -128,6 +133,7 @@ function glueFor(archId: string, uc: Record<string, number>): ArchGlue {
       },
       regOrder: ['rax', 'rbx', 'rcx', 'rdx', 'rsi', 'rdi', 'rbp', 'rsp', 'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15', 'rip'],
       syscallNumReg: 'rax',
+      returnReg: 'rax',
       argRegs: ['rdi', 'rsi', 'rdx', 'r10', 'r8', 'r9'],
       argReg: 'rdi',
       width: 64,
@@ -142,6 +148,7 @@ function glueFor(archId: string, uc: Record<string, number>): ArchGlue {
       },
       regOrder: ['eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp', 'eip'],
       syscallNumReg: 'eax',
+      returnReg: 'eax',
       argRegs: ['ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp'],
       argReg: null, // cdecl: arguments arrive on the stack
       width: 32,
@@ -157,6 +164,7 @@ function glueFor(archId: string, uc: Record<string, number>): ArchGlue {
       regs: r,
       regOrder: [...Array.from({ length: 13 }, (_, i) => 'r' + i), 'sp', 'lr', 'pc'],
       syscallNumReg: 'r7',
+      returnReg: 'r0',
       argRegs: ['r0', 'r1', 'r2', 'r3', 'r4', 'r5'],
       argReg: 'r0',
       width: 32,
@@ -170,6 +178,7 @@ function glueFor(archId: string, uc: Record<string, number>): ArchGlue {
     regs: x,
     regOrder: [...Array.from({ length: 31 }, (_, i) => 'x' + i), 'sp', 'pc'],
     syscallNumReg: 'x8',
+    returnReg: 'x0',
     argRegs: ['x0', 'x1', 'x2', 'x3', 'x4', 'x5'],
     argReg: 'x0',
     width: 64,
@@ -188,6 +197,7 @@ function syscallTable(archId: string): { num: number; name: string; args?: strin
 
 interface SyscallCtx {
   e: UnicornInstance;
+  archId: string;
   glue: ArchGlue;
   getReg(name: string): bigint;
   setReg(name: string, v: bigint): void;
@@ -197,6 +207,26 @@ interface SyscallCtx {
   mmapCursor: number;
   nextFd: number;
   stop(reason: string): void;
+}
+
+const ENOSYS = -38n;
+const EINVAL = -22n;
+const EFAULT = -14n;
+const MAX_MMAP_BYTES = 16 * 1024 * 1024;
+const MMAP_END = MMAP_BASE + 64 * 1024 * 1024;
+const MAX_IO_BYTES = 1024 * 1024;
+
+const SOCKETCALL_NAMES: Record<number, string> = {
+  1: 'socket', 2: 'bind', 3: 'connect', 4: 'listen', 5: 'accept',
+  6: 'getsockname', 7: 'getpeername', 8: 'socketpair', 9: 'send',
+  10: 'recv', 11: 'sendto', 12: 'recvfrom', 13: 'shutdown',
+  14: 'setsockopt', 15: 'getsockopt', 16: 'sendmsg', 17: 'recvmsg',
+  18: 'accept4', 19: 'recvmmsg', 20: 'sendmmsg',
+};
+
+function syscallFailure(ctx: SyscallCtx, call: string, code: bigint, label: string): bigint {
+  ctx.syscalls.push({ call, ret: `${code} (${label})` });
+  return code;
 }
 
 const RET = {
@@ -215,9 +245,12 @@ function emulateSyscall(ctx: SyscallCtx, name: string, args: bigint[]): bigint |
 
   switch (name) {
     case 'execve':
-    case 'execveat':
       ctx.syscalls.push({ call: `${name}(${strArg(0)}, ${hex(args[1] ?? 0n)}, ${hex(args[2] ?? 0n)})`, ret: '—' });
       ctx.stop(`execve(${strArg(0)}) — process replaced`);
+      return null;
+    case 'execveat':
+      ctx.syscalls.push({ call: `execveat(${args[0] ?? 0n}, ${strArg(1)}, ${hex(args[2] ?? 0n)}, ${hex(args[3] ?? 0n)}, ${args[4] ?? 0n})`, ret: '—' });
+      ctx.stop(`execveat(${strArg(1)}) — process replaced`);
       return null;
     case 'exit':
     case 'exit_group':
@@ -225,17 +258,44 @@ function emulateSyscall(ctx: SyscallCtx, name: string, args: bigint[]): bigint |
       ctx.stop(`${name}(${args[0] ?? 0n})`);
       return null;
     case 'write':
-    case 'pwrite64':
-    case 'writev': {
-      // write(fd, buf, count) — show the bytes being written
-      let buf = '';
-      const n = Number(args[2] ?? 0n);
-      if (name !== 'writev' && n > 0 && n <= 4096) {
-        const bytes = ctx.readBytes(args[1] ?? 0n, Math.min(n, 32));
-        if (bytes) buf = ` "${dec(new TextDecoder('latin1').decode(bytes)).slice(0, 32)}"`;
+    case 'pwrite64': {
+      const count = args[2] ?? 0n;
+      if (count > BigInt(MAX_IO_BYTES)) {
+        return syscallFailure(ctx, `${name}(${args[0] ?? 0n}, ${hex(args[1] ?? 0n)}, ${count})`, EINVAL, 'I/O limit');
       }
-      ctx.syscalls.push({ call: `${name}(${args[0] ?? 0n}${buf ? ',' + buf : `, ${hex(args[1] ?? 0n)}`}, ${args[2] ?? 0n})`, ret: `${args[2] ?? 0n}` });
-      return args[2] ?? 0n;
+      const preview = count > 0n ? ctx.readBytes(args[1] ?? 0n, Number(count > 32n ? 32n : count)) : new Uint8Array();
+      if (!preview) return syscallFailure(ctx, `${name}(${args[0] ?? 0n}, ${hex(args[1] ?? 0n)}, ${count})`, EFAULT, 'EFAULT');
+      const shown = preview.length ? ` "${dec(new TextDecoder('latin1').decode(preview))}"` : ` ${hex(args[1] ?? 0n)}`;
+      ctx.syscalls.push({ call: `${name}(${args[0] ?? 0n},${shown}, ${count})`, ret: `${count} (simulated)` });
+      return count;
+    }
+    case 'writev': {
+      const iovcnt = Number(args[2] ?? 0n);
+      if (!Number.isInteger(iovcnt) || iovcnt < 0 || iovcnt > 64) {
+        return syscallFailure(ctx, `writev(${args[0] ?? 0n}, ${hex(args[1] ?? 0n)}, ${args[2] ?? 0n})`, EINVAL, 'EINVAL');
+      }
+      const stride = ctx.glue.width === 64 ? 16 : 8;
+      const block = iovcnt ? ctx.readBytes(args[1] ?? 0n, iovcnt * stride) : new Uint8Array();
+      if (!block) return syscallFailure(ctx, `writev(${args[0] ?? 0n}, ${hex(args[1] ?? 0n)}, ${iovcnt})`, EFAULT, 'EFAULT');
+      const view = new DataView(block.buffer, block.byteOffset, block.byteLength);
+      let total = 0n;
+      let preview = '';
+      for (let i = 0; i < iovcnt; i++) {
+        const offset = i * stride;
+        const ptr = ctx.glue.width === 64 ? view.getBigUint64(offset, true) : BigInt(view.getUint32(offset, true));
+        const len = ctx.glue.width === 64 ? view.getBigUint64(offset + 8, true) : BigInt(view.getUint32(offset + 4, true));
+        total += len;
+        if (total > BigInt(MAX_IO_BYTES)) {
+          return syscallFailure(ctx, `writev(${args[0] ?? 0n}, ${hex(args[1] ?? 0n)}, ${iovcnt})`, EINVAL, 'I/O limit');
+        }
+        if (len > 0n && preview.length < 32) {
+          const chunk = ctx.readBytes(ptr, Number(len > BigInt(32 - preview.length) ? BigInt(32 - preview.length) : len));
+          if (!chunk) return syscallFailure(ctx, `writev(${args[0] ?? 0n}, ${hex(args[1] ?? 0n)}, ${iovcnt})`, EFAULT, 'EFAULT');
+          preview += dec(new TextDecoder('latin1').decode(chunk));
+        }
+      }
+      ctx.syscalls.push({ call: `writev(${args[0] ?? 0n}, ${hex(args[1] ?? 0n)}, ${iovcnt})${preview ? ` "${preview}"` : ''}`, ret: `${total} (simulated)` });
+      return total;
     }
     case 'open':
     case 'openat':
@@ -260,27 +320,80 @@ function emulateSyscall(ctx: SyscallCtx, name: string, args: bigint[]): bigint |
     case 'dup3':
       ctx.syscalls.push({ call: `${name}(${args[0] ?? 0n}, ${args[1] ?? 0n})`, ret: String(args[1] ?? 0n) });
       return args[1] ?? 0n;
-    case 'mmap': {
-      // hand out a fresh RWX page
-      const len = Number(args[1] ?? 0n) || 0x1000;
-      const page = ctx.mmapCursor;
-      ctx.mmapCursor += (len + 0xfff) & ~0xfff;
-      try {
-        (ctx.e as unknown as { mem_map(a: number, s: number, p: number): void }).mem_map(page, (len + 0xfff) & ~0xfff, 7);
-      } catch {
-        /* already mapped — reuse */
+    case 'mmap':
+    case 'mmap2': {
+      let mapArgs = args;
+      // x86-32's old mmap syscall takes a pointer to a six-word struct.
+      if (name === 'mmap' && ctx.archId === 'x86-32') {
+        const block = ctx.readBytes(args[0] ?? 0n, 24);
+        if (!block) return syscallFailure(ctx, `mmap(${hex(args[0] ?? 0n)})`, EFAULT, 'EFAULT');
+        const view = new DataView(block.buffer, block.byteOffset, block.byteLength);
+        mapArgs = Array.from({ length: 6 }, (_, i) => BigInt(view.getUint32(i * 4, true)));
       }
-      ctx.syscalls.push({ call: `mmap(${hex(args[0] ?? 0n)}, ${args[1] ?? 0n}, ${args[2] ?? 0n}, …)`, ret: hex(page) });
+      const requested = mapArgs[1] ?? 0n;
+      if (requested <= 0n || requested > BigInt(MAX_MMAP_BYTES)) {
+        return syscallFailure(ctx, `${name}(${hex(mapArgs[0] ?? 0n)}, ${requested})`, EINVAL, 'EINVAL');
+      }
+      const len = Number(requested);
+      const span = Math.ceil(len / 0x1000) * 0x1000;
+      const page = ctx.mmapCursor;
+      if (page + span > MMAP_END) {
+        return syscallFailure(ctx, `${name}(${hex(mapArgs[0] ?? 0n)}, ${requested})`, EINVAL, 'mmap limit');
+      }
+      try {
+        ctx.e.mem_map(page, span, Number((mapArgs[2] ?? 7n) & 7n));
+      } catch {
+        return syscallFailure(ctx, `${name}(${hex(mapArgs[0] ?? 0n)}, ${requested})`, EINVAL, 'mapping failed');
+      }
+      ctx.mmapCursor += span;
+      ctx.syscalls.push({ call: `${name}(${hex(mapArgs[0] ?? 0n)}, ${requested}, ${mapArgs[2] ?? 0n}, …)`, ret: hex(page) });
       return BigInt(page);
     }
+    case 'mprotect':
+    case 'munmap': {
+      const addr = args[0] ?? 0n;
+      const size = args[1] ?? 0n;
+      const call = `${name}(${hex(addr)}, ${size}${name === 'mprotect' ? `, ${args[2] ?? 0n}` : ''})`;
+      if (addr > BigInt(Number.MAX_SAFE_INTEGER) || addr % 0x1000n !== 0n || size <= 0n || size > BigInt(MAX_MMAP_BYTES)) {
+        return syscallFailure(ctx, call, EINVAL, 'EINVAL');
+      }
+      try {
+        const span = Math.ceil(Number(size) / 0x1000) * 0x1000;
+        if (name === 'mprotect') ctx.e.mem_protect(Number(addr), span, Number((args[2] ?? 0n) & 7n));
+        else ctx.e.mem_unmap(Number(addr), span);
+      } catch {
+        return syscallFailure(ctx, call, EINVAL, 'EINVAL');
+      }
+      ctx.syscalls.push({ call, ret: '0' });
+      return 0n;
+    }
+    case 'socketcall': {
+      const callNo = Number(args[0] ?? 0n);
+      const target = SOCKETCALL_NAMES[callNo];
+      if (!target) return syscallFailure(ctx, `socketcall(${callNo}, ${hex(args[1] ?? 0n)})`, EINVAL, 'EINVAL');
+      const block = ctx.readBytes(args[1] ?? 0n, 24);
+      if (!block) return syscallFailure(ctx, `socketcall(${callNo}, ${hex(args[1] ?? 0n)})`, EFAULT, 'EFAULT');
+      const view = new DataView(block.buffer, block.byteOffset, block.byteLength);
+      const nested = Array.from({ length: 6 }, (_, i) => BigInt(view.getUint32(i * 4, true)));
+      return emulateSyscall(ctx, target, nested);
+    }
+    case 'connect':
+    case 'bind':
+    case 'listen':
+    case 'shutdown':
+      ctx.syscalls.push({ call: `${name}(${args.slice(0, name === 'listen' || name === 'shutdown' ? 2 : 3).map((a) => hex(a)).join(', ')})`, ret: '0 (simulated)' });
+      return 0n;
+    case 'send':
+    case 'sendto':
+      ctx.syscalls.push({ call: `${name}(${args[0] ?? 0n}, ${hex(args[1] ?? 0n)}, ${args[2] ?? 0n}, …)`, ret: `${args[2] ?? 0n} (simulated)` });
+      return args[2] ?? 0n;
     case 'read':
     case 'recv':
     case 'recvfrom':
       ctx.syscalls.push({ call: `${name}(${args[0] ?? 0n}, ${hex(args[1] ?? 0n)}, ${args[2] ?? 0n})`, ret: '0' });
       return 0n;
     default: {
-      ctx.syscalls.push({ call: `${name}(${args.map((a) => hex(a)).join(', ')})`, ret: '0' });
-      return 0n;
+      return syscallFailure(ctx, `${name}(${args.map((a) => hex(a)).join(', ')})`, ENOSYS, 'not modeled');
     }
   }
 }
@@ -380,6 +493,7 @@ export async function runEmulation(
   const syscalls: EmuSyscall[] = [];
   const ctx: SyscallCtx = {
     e,
+    archId,
     glue,
     getReg,
     setReg,
@@ -401,7 +515,7 @@ export async function runEmulation(
     const name = byNum.get(num) ?? `syscall_${num}`;
     const args = glue.argRegs.map((r) => getReg(r));
     const ret = emulateSyscall(ctx, name, args);
-    if (ret !== null) setReg(glue.syscallNumReg, ret);
+    if (ret !== null) setReg(glue.returnReg, ret);
   };
 
   if (archId === 'x86-64') {
@@ -424,8 +538,20 @@ export async function runEmulation(
       return;
     }
     steps++;
-    if (trace.length < TRACE_CAP) trace.push({ addr: a, size });
-    else traceTruncated = true;
+    if (trace.length < TRACE_CAP) {
+      let instructionBytes: Uint8Array;
+      try {
+        instructionBytes = Uint8Array.from(e.mem_read(a, size));
+      } catch {
+        instructionBytes = new Uint8Array(0);
+      }
+      trace.push({
+        addr: a,
+        size,
+        bytes: instructionBytes,
+        registers: glue.regOrder.map((name) => hex(getReg(name))),
+      });
+    } else traceTruncated = true;
     if (steps >= STEP_LIMIT) {
       limitReached = true;
       ctx.stop(`instruction limit (${STEP_LIMIT}) hit — infinite loop?`);

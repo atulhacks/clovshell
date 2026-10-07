@@ -199,6 +199,28 @@
           <div class="emu-regs" id="emu-regs"></div>
         </div>
       </div>
+      <div class="trace-panel hidden" id="trace-panel">
+        <div class="trace-head">
+          <div>
+            <h3 class="emu-sub">execution trace <span class="dim">— captured before each instruction</span></h3>
+            <span class="stats" id="trace-stats"></span>
+          </div>
+          <div class="trace-actions">
+            <button class="btn ghost" id="trace-prev" type="button" aria-label="Previous instruction">← prev</button>
+            <span class="trace-position" id="trace-position"></span>
+            <button class="btn ghost" id="trace-next" type="button" aria-label="Next instruction">next →</button>
+            <button class="btn ghost" id="trace-download" type="button">save JSON</button>
+          </div>
+        </div>
+        <div class="trace-grid">
+          <div class="trace-list" id="trace-list" aria-label="Executed instructions"></div>
+          <div class="trace-detail">
+            <div class="trace-selected" id="trace-selected"></div>
+            <h4 class="emu-sub">registers before selected instruction <span class="dim">(changes since prior step highlighted)</span></h4>
+            <div class="emu-regs trace-registers" id="trace-registers"></div>
+          </div>
+        </div>
+      </div>
       <p class="msg" id="emu-msg" role="status"></p>
     </section>
 

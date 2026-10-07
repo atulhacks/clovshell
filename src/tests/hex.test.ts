@@ -6,6 +6,7 @@ import {
   formatAddress,
   parseBadChars,
   parseHexInput,
+  MAX_HEX_BYTES,
   toHex,
   toSpacedHex,
 } from '../hex';
@@ -39,6 +40,12 @@ describe('parseHexInput', () => {
   it('rejects an odd number of digits', () => {
     expect(parseHexInput('b873').error).toBeNull(); // even
     expect(parseHexInput('b873f').error).toMatch(/odd number/);
+  });
+
+  it('rejects oversized input before allocating a byte array', () => {
+    const res = parseHexInput('aa'.repeat(MAX_HEX_BYTES + 1));
+    expect(res.error).toMatch(/limit/);
+    expect(res.bytes).toHaveLength(0);
   });
 });
 

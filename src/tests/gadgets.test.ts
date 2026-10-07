@@ -20,10 +20,10 @@ describe('findGadgets', () => {
     expect(texts).toContain('pop rdi ; pop rsi ; pop rdx ; pop rcx ; pop rax ; ret');
     expect(texts).toContain('pop rsi ; pop rdx ; pop rcx ; pop rax ; ret');
     expect(texts.some((t) => t.startsWith('syscall'))).toBe(true);
-    // leave is itself a terminator, so a gadget ENDS at it — from 5b c9 c3 the
-    // gadgets are "pop rbx ; leave" and "leave", never "leave ; ret"
-    expect(texts).toContain('pop rbx ; leave');
-    expect(texts).toContain('leave');
+    // leave changes the frame pointer but does not transfer control.
+    expect(texts).toContain('pop rbx ; leave ; ret');
+    expect(texts).toContain('leave ; ret');
+    expect(texts).not.toContain('leave');
   });
 
   it('finds arm64 control-flow gadgets', () => {
@@ -37,6 +37,18 @@ describe('findGadgets', () => {
     expect(texts).toContain('ret');
     expect(texts).toContain('br x1');
     expect(texts.some((t) => t.startsWith('ldr x0'))).toBe(true);
+  });
+
+  it('does not mistake ordinary ARM data operations for control transfers', () => {
+    const bytes = assemble('arm', 'mov r0, #1\nldr r1, [r2]\nadd r3, r3, #1').bytes!;
+    expect(findGadgets('arm', bytes)).toEqual([]);
+  });
+
+  it('recognizes ARM operations that actually write pc', () => {
+    const bytes = assemble('arm', 'pop {r0, pc}').bytes!;
+    const result = findGadgets('arm', bytes);
+    expect(Array.isArray(result)).toBe(true);
+    if (Array.isArray(result)) expect(result.map((g) => g.text)).toContain('pop {r0, pc}');
   });
 
   it('deduplicates identical instruction sequences', () => {

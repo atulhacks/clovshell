@@ -85,11 +85,19 @@ export async function initEngines(
 ): Promise<void> {
   if (keystoneMod && capstoneReady) return;
   const locate = (path: string) => new URL(WASM_BASE + path, document.baseURI).href;
-  keystoneMod = await MKeystone({ locateFile: locate });
-  onStage?.('keystone');
+  if (!keystoneMod) {
+    keystoneMod = await MKeystone({ locateFile: locate });
+    onStage?.('keystone');
+  }
+  await initDisassembler();
+  onStage?.('capstone');
+}
+
+export async function initDisassembler(baseURI = document.baseURI): Promise<void> {
+  if (capstoneReady) return;
+  const locate = (path: string) => new URL(WASM_BASE + path, baseURI).href;
   await loadCapstone({ locateFile: locate });
   capstoneReady = true;
-  onStage?.('capstone');
 }
 
 export function enginesReady(): boolean {
@@ -259,7 +267,7 @@ function decodeFailure(arch: ArchDef, bytes: Uint8Array): DisassembleResult {
   };
 }
 
-export function disassemble(archId: string, bytes: Uint8Array): DisassembleResult {
+export function disassemble(archId: string, bytes: Uint8Array, maxInsns?: number, address = 0): DisassembleResult {
   const arch = getArch(archId);
   if (bytes.length === 0) {
     return { ok: true, insns: [], error: null, consumed: 0, total: 0 };
@@ -267,7 +275,7 @@ export function disassemble(archId: string, bytes: Uint8Array): DisassembleResul
   const cs = csInstance(arch);
   let raw: Insn[];
   try {
-    raw = cs.disasm(bytes, { address: 0 });
+    raw = cs.disasm(bytes, { address, count: maxInsns });
   } catch {
     // capstone-wasm throws when zero instructions decode
     return decodeFailure(arch, bytes);
@@ -281,6 +289,6 @@ export function disassemble(archId: string, bytes: Uint8Array): DisassembleResul
     mnemonic: i.mnemonic,
     opStr: i.opStr,
   }));
-  const consumed = insns.at(-1)!.address + insns.at(-1)!.bytes.length;
+  const consumed = insns.at(-1)!.address + insns.at(-1)!.bytes.length - address;
   return { ok: true, insns, error: null, consumed, total: bytes.length };
 }

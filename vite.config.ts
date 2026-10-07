@@ -8,4 +8,7 @@ export default defineConfig({
     // keep wasm/asset urls intact rather than inlining anything
     assetsInlineLimit: 0,
   },
+  worker: {
+    format: 'es',
+  },
 });

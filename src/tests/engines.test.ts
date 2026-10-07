@@ -85,6 +85,16 @@ describe('disassemble', () => {
     expect(res.consumed).toBe(bytes.length);
   });
 
+  it('decodes at the executed address while keeping consumed relative to input', () => {
+    const bytes = assemble('x86-64', 'jmp target\nnop\ntarget:\nret').bytes!;
+    const res = disassemble('x86-64', bytes, 1, 0x10000);
+    expect(res.ok).toBe(true);
+    expect(res.insns).toHaveLength(1);
+    expect(res.insns[0]?.address).toBe(0x10000);
+    expect(res.insns[0]?.opStr).toBe('0x10003');
+    expect(res.consumed).toBe(res.insns[0]?.bytes.length);
+  });
+
   it('arm64 decodes with resolved branch targets', () => {
     const res = disassemble('arm64', Uint8Array.from([0x01, 0x00, 0x80, 0xd2]));
     expect(res.ok).toBe(true);

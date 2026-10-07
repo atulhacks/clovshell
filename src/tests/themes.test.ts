@@ -121,8 +121,8 @@ describe('wiring: index.html + assets', () => {
     expect(html).toMatch(/<meta name="theme-color" content="#080808"/);
   });
 
-  it('service worker cache and manifest are bumped to the mono palette', () => {
-    expect(read('public/sw.js')).toContain("CACHE = 'clovshell-v1.2'");
+  it('service worker cache is build-derived and the manifest uses mono', () => {
+    expect(read('public/sw.js')).toContain("CACHE = '__BUILD_CACHE__'");
     const manifest = read('public/manifest.webmanifest');
     expect(manifest).toContain('"background_color": "#080808"');
     expect(manifest).toContain('"theme_color": "#080808"');
