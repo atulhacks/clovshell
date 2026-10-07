@@ -9,6 +9,7 @@ import {
   getArch,
   initEngines,
 } from './engines';
+import type { DisassembleResult } from './engines';
 import {
   countBadBytes,
   countNullBytes,
@@ -213,7 +214,46 @@ function renderShellcode(bytes: Uint8Array | null, count: number, fromError = fa
   shellcodeStats.innerHTML = parts.join(' · ');
 }
 
-function renderDisassembly(result: ReturnType<typeof disassemble>): void {
+const DISASM_PAGE_SIZE = 500;
+let shownDisassembly: DisassembleResult | null = null;
+let shownInsns = 0;
+
+function appendDisassemblyPage(): void {
+  const result = shownDisassembly;
+  if (!result?.ok) return;
+  disasmListing.querySelector('.listing-more')?.remove();
+  const end = Math.min(shownInsns + DISASM_PAGE_SIZE, result.insns.length);
+  const arch = getArch(archId);
+  const fragment = document.createDocumentFragment();
+  for (let i = shownInsns; i < end; i++) {
+    const insn = result.insns[i]!;
+    const bytesHtml = hexWithBadFlags(insn.bytes, ' ');
+    const row = el('div', { class: 'row' });
+    row.innerHTML =
+      `<span class="addr">${formatAddress(insn.address)}</span>` +
+      `<span class="bytes">${bytesHtml}</span>` +
+      `<span class="insn">${highlightInstruction(insn.mnemonic, insn.opStr, arch)}</span>`;
+    fragment.append(row);
+  }
+  shownInsns = end;
+  disasmListing.append(fragment);
+  if (end < result.insns.length) {
+    const more = el('button', { class: 'listing-more', type: 'button' },
+      `show next ${Math.min(DISASM_PAGE_SIZE, result.insns.length - end)} · ${end} of ${result.insns.length}`);
+    more.addEventListener('click', appendDisassemblyPage);
+    disasmListing.append(more);
+  } else {
+    const undecoded = result.total - result.consumed;
+    if (undecoded > 0) {
+      disasmListing.append(el('div', { class: 'listing-truncated' },
+        `⚠ stopped at 0x${formatAddress(result.consumed)} — ${undecoded} undecodable byte${undecoded > 1 ? 's' : ''}`));
+    }
+  }
+}
+
+function renderDisassembly(result: DisassembleResult): void {
+  shownDisassembly = result;
+  shownInsns = 0;
   disasmListing.replaceChildren();
   if (!result.ok) {
     disasmListing.append(el('div', { class: 'listing-empty' }, result.error ?? 'nothing to decode'));
@@ -225,20 +265,9 @@ function renderDisassembly(result: ReturnType<typeof disassemble>): void {
     disasmStats.innerHTML = '';
     return;
   }
-  const arch = getArch(archId);
-  for (const insn of result.insns) {
-    const bytesHtml = hexWithBadFlags(insn.bytes, ' ');
-    const row = el('div', { class: 'row' });
-    row.innerHTML =
-      `<span class="addr">${formatAddress(insn.address)}</span>` +
-      `<span class="bytes">${bytesHtml}</span>` +
-      `<span class="insn">${highlightInstruction(insn.mnemonic, insn.opStr, arch)}</span>`;
-    disasmListing.append(row);
-  }
+  appendDisassemblyPage();
   const undecoded = result.total - result.consumed;
   if (undecoded > 0) {
-    disasmListing.append(el('div', { class: 'listing-truncated' },
-      `⚠ stopped at 0x${formatAddress(result.consumed)} — ${undecoded} undecodable byte${undecoded > 1 ? 's' : ''}`));
     disasmStats.innerHTML = `<span class="stat-bad">${result.insns.length} insn · ${undecoded} bytes undecoded</span>`;
   } else {
     disasmStats.textContent = `${result.insns.length} insn · ${result.total} bytes`;
@@ -310,7 +339,20 @@ function runAssemble(): void {
   renderExports();
 }
 
+let disasmGeneration = 0;
+let disasmWorker: Worker | null = null;
+let disasmTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelDisassembly(): void {
+  disasmGeneration++;
+  disasmWorker?.terminate();
+  disasmWorker = null;
+  if (disasmTimer !== null) clearTimeout(disasmTimer);
+  disasmTimer = null;
+}
+
 function runDisassemble(): void {
+  cancelDisassembly();
   const text = hexInput.value.trim();
   if (!text) {
     disassembleClear();
@@ -329,21 +371,52 @@ function runDisassemble(): void {
     return;
   }
   setCurrentBytes(bytes, 'hex input');
-  const res = disassemble(archId, bytes);
-  renderDisassembly(res);
-  if (!res.ok) {
-    setMsg(hexMsg, `✗ ${res.error}`, 'err');
-    return;
-  }
-  const undecoded = res.total - res.consumed;
-  if (undecoded > 0) {
-    setMsg(hexMsg, `⚠ decoded ${res.insns.length} instructions, then hit undecodable bytes`, 'warn');
-  } else {
-    setMsg(hexMsg, `✓ decoded ${res.insns.length} instruction${res.insns.length === 1 ? '' : 's'}`, 'ok');
-  }
+  setMsg(hexMsg, `decoding ${bytes.length} bytes…`, '');
+  disasmListing.replaceChildren(el('div', { class: 'listing-empty' }, '// decoding…'));
+  disasmStats.textContent = '';
+  const generation = disasmGeneration;
+  const worker = new Worker(new URL('./disasm-worker.ts', import.meta.url), { type: 'module' });
+  disasmWorker = worker;
+  const finish = (): void => {
+    if (disasmWorker !== worker) return;
+    worker.terminate();
+    disasmWorker = null;
+    if (disasmTimer !== null) clearTimeout(disasmTimer);
+    disasmTimer = null;
+  };
+  const fail = (message: string): void => {
+    if (generation !== disasmGeneration) return;
+    finish();
+    setMsg(hexMsg, `✗ ${message}`, 'err');
+    renderDisassembly({ ok: false, insns: [], error: message, consumed: 0, total: bytes.length });
+  };
+  disasmTimer = setTimeout(() => fail('disassembly timed out after 30 seconds'), 30_000);
+  worker.onmessage = (event: MessageEvent<{ result?: DisassembleResult; error?: string }>) => {
+    if (generation !== disasmGeneration) return;
+    finish();
+    if (!event.data.result) {
+      fail(event.data.error ?? 'disassembly worker failed');
+      return;
+    }
+    const res = event.data.result;
+    renderDisassembly(res);
+    if (!res.ok) {
+      setMsg(hexMsg, `✗ ${res.error}`, 'err');
+      return;
+    }
+    const undecoded = res.total - res.consumed;
+    setMsg(hexMsg, undecoded > 0
+      ? `⚠ decoded ${res.insns.length} instructions, then hit undecodable bytes`
+      : `✓ decoded ${res.insns.length} instruction${res.insns.length === 1 ? '' : 's'}`,
+    undecoded > 0 ? 'warn' : 'ok');
+  };
+  worker.onerror = (event) => fail(event.message || 'disassembly worker failed');
+  const copy = bytes.slice();
+  worker.postMessage({ archId, bytes: copy, baseURI: document.baseURI }, [copy.buffer]);
 }
 
 function disassembleClear(): void {
+  cancelDisassembly();
   clearBytesFrom('hex input');
   renderDisassembly({ ok: true, insns: [], error: null, consumed: 0, total: 0 });
   setMsg(hexMsg, '', '');
@@ -980,6 +1053,7 @@ editor.onChange(() => {
 });
 
 hexInput.addEventListener('input', () => {
+  cancelDisassembly();
   saveState();
   invalidateDerivedViews();
   autoDisassemble();

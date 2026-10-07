@@ -899,6 +899,24 @@ body.dragging::after {
   background: rgba(251, 191, 36, 0.03);
 }
 
+.listing-more {
+  display: block;
+  width: 100%;
+  padding: 11px 14px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--accent);
+  font: 12px var(--mono);
+  text-align: left;
+  cursor: pointer;
+}
+
+.listing-more:hover,
+.listing-more:focus-visible {
+  background: var(--bg-hover);
+}
+
 /* ------------------------------------------------------------------ exports */
 
 .exports-grid {

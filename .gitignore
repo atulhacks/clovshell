@@ -11,6 +11,8 @@ scripts/kernel-src/
 # local browser-test artifacts
 .testout/
 .vite/
+test-results/
+playwright-report/
 
 *.log
 .DS_Store

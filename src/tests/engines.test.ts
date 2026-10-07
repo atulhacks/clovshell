@@ -77,6 +77,62 @@ describe('assemble', () => {
 });
 
 describe('disassemble', () => {
+  it('decodes the full maximum-size one-byte-instruction input without exhausting WASM memory', () => {
+    const bytes = new Uint8Array(64 * 1024).fill(0x90);
+    const res = disassemble('x86-64', bytes);
+    expect(res.ok, res.error ?? '').toBe(true);
+    expect(res.insns).toHaveLength(bytes.length);
+    expect(res.consumed).toBe(bytes.length);
+    expect(res.insns[255]?.address).toBe(255);
+    expect(res.insns[256]?.address).toBe(256);
+    expect(res.insns.at(-1)?.address).toBe(bytes.length - 1);
+    expect(Array.from(res.insns[0]!.bytes)).toEqual([0x90]);
+    expect(Array.from(res.insns.at(-1)!.bytes)).toEqual([0x90]);
+  });
+
+  it('decodes maximum-size fixed-width ARM buffers across multiple batches', () => {
+    for (const [arch, nop] of [
+      ['arm', [0x00, 0xf0, 0x20, 0xe3]],
+      ['arm64', [0x1f, 0x20, 0x03, 0xd5]],
+    ] as const) {
+      const bytes = Uint8Array.from(Array.from({ length: 16 * 1024 }, () => nop).flat());
+      const res = disassemble(arch, bytes);
+      expect(res.ok, `${arch}: ${res.error}`).toBe(true);
+      expect(res.insns).toHaveLength(16 * 1024);
+      expect(res.consumed).toBe(bytes.length);
+    }
+  });
+
+  it('preserves instruction boundaries and the caller count across batches', () => {
+    const bytes = new Uint8Array(600 * 2 + 1);
+    for (let i = 0; i < 600; i++) {
+      bytes[i * 2] = 0x66;
+      bytes[i * 2 + 1] = 0x90;
+    }
+    bytes[bytes.length - 1] = 0xc3;
+    const limited = disassemble('x86-64', bytes, 300, 0x1000);
+    expect(limited.ok).toBe(true);
+    expect(limited.insns).toHaveLength(300);
+    expect(limited.consumed).toBe(600);
+    expect(limited.insns[256]?.address).toBe(0x1200);
+
+    const full = disassemble('x86-64', bytes, undefined, 0x1000);
+    expect(full.ok).toBe(true);
+    expect(full.insns).toHaveLength(601);
+    expect(full.consumed).toBe(bytes.length);
+    expect(full.insns.at(-1)?.address).toBe(0x1000 + 1200);
+    expect(disassemble('x86-64', bytes, 0, 0x1000).insns).toHaveLength(601);
+  });
+
+  it('reports an undecodable tail after several complete batches', () => {
+    const bytes = Uint8Array.from([...new Array<number>(600).fill(0x90), 0xff]);
+    const res = disassemble('x86-64', bytes);
+    expect(res.ok).toBe(true);
+    expect(res.insns).toHaveLength(600);
+    expect(res.consumed).toBe(600);
+    expect(res.total).toBe(601);
+  });
+
   it('x86-64 round-trip through bytes', () => {
     const bytes = assemble('x86-64', 'mov eax, 0x64696b73\nret').bytes!;
     const res = disassemble('x86-64', bytes);

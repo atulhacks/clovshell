@@ -222,6 +222,13 @@ export interface DisassembleResult {
   total: number;
 }
 
+// Capstone's bulk API allocates an instruction array inside its WASM heap,
+// while its JS wrapper copies the entire input onto the WASM stack. Bound both
+// dimensions; 4096 bytes still accommodates 256 maximum-length x86 insns.
+const DISASM_BATCH_INSNS = 256;
+const DISASM_BATCH_BYTES = 4096;
+const ARCH_HINT_MAX_BYTES = 256;
+
 function csInstance(arch: ArchDef): Capstone {
   let cs = csInstances.get(arch.id);
   if (!cs) {
@@ -237,6 +244,9 @@ function csInstance(arch: ArchDef): Capstone {
  * it saves a dead end.
  */
 function decodingArchHint(arch: ArchDef, bytes: Uint8Array): string | null {
+  // A hint is useful for short pasted snippets; probing whole large buffers
+  // across three other architectures needlessly repeats the expensive decode.
+  if (bytes.length > ARCH_HINT_MAX_BYTES) return null;
   for (const other of ARCHES) {
     if (other.id === arch.id) continue;
     let insns: Insn[];
@@ -273,22 +283,37 @@ export function disassemble(archId: string, bytes: Uint8Array, maxInsns?: number
     return { ok: true, insns: [], error: null, consumed: 0, total: 0 };
   }
   const cs = csInstance(arch);
-  let raw: Insn[];
-  try {
-    raw = cs.disasm(bytes, { address, count: maxInsns });
-  } catch {
-    // capstone-wasm throws when zero instructions decode
-    return decodeFailure(arch, bytes);
+  // The underlying binding uses count=0 for an unbounded decode.
+  const limit = maxInsns === 0 ? undefined : maxInsns;
+  const insns: DisasmLine[] = [];
+  let consumed = 0;
+  while (consumed < bytes.length && (limit === undefined || insns.length < limit)) {
+    const count = Math.min(DISASM_BATCH_INSNS, limit === undefined ? DISASM_BATCH_INSNS : limit - insns.length);
+    let raw: Insn[];
+    try {
+      raw = cs.disasm(bytes.subarray(consumed, consumed + DISASM_BATCH_BYTES), { address: address + consumed, count });
+    } catch (error) {
+      // capstone-wasm throws when the next byte cannot start an instruction.
+      if (!(error instanceof Error) || !error.message.startsWith('Failed to disassemble')) {
+        const detail = error instanceof Error ? error.message : String(error);
+        return { ok: false, insns: [], error: `disassembler failed — ${detail}`, consumed, total: bytes.length };
+      }
+      break;
+    }
+    if (raw.length === 0) break;
+    for (const i of raw) {
+      // The wrapper exposes a view into Capstone's freed WASM allocation.
+      // Copy now, before the next batch can reuse that memory.
+      insns.push({ address: Number(i.address), bytes: i.bytes.slice(), mnemonic: i.mnemonic, opStr: i.opStr });
+    }
+    const last = raw.at(-1)!;
+    const next = Number(last.address) + last.bytes.length - address;
+    if (next <= consumed || next > bytes.length) {
+      return { ok: false, insns: [], error: 'disassembler returned an invalid instruction boundary', consumed, total: bytes.length };
+    }
+    consumed = next;
+    if (raw.length < count) break;
   }
-  if (raw.length === 0) {
-    return decodeFailure(arch, bytes);
-  }
-  const insns: DisasmLine[] = raw.map((i) => ({
-    address: Number(i.address),
-    bytes: i.bytes,
-    mnemonic: i.mnemonic,
-    opStr: i.opStr,
-  }));
-  const consumed = insns.at(-1)!.address + insns.at(-1)!.bytes.length - address;
+  if (insns.length === 0) return decodeFailure(arch, bytes);
   return { ok: true, insns, error: null, consumed, total: bytes.length };
 }

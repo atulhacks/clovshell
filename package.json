@@ -11,7 +11,8 @@
     "build": "node scripts/copy-wasm.mjs && vite build && node scripts/finalize-sw.mjs",
     "preview": "vite preview",
     "check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "npm run build && playwright test"
   },
   "dependencies": {
     "@alexaltea/keystone-js": "^0.9.2",
@@ -19,6 +20,7 @@
     "capstone-wasm": "^1.0.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "^26.4.0",
     "typescript": "^5.9.3",
     "vite": "^7.1.5",
