@@ -13,11 +13,7 @@
     "isolatedModules": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "noEmit": true,
-    "paths": {
-      // capstone-wasm's package.json exports omit a "types" condition
-      "capstone-wasm": ["./node_modules/capstone-wasm/dist/index.d.ts"]
-    }
+    "noEmit": true
   },
   "include": ["src", "vite.config.ts"]
 }

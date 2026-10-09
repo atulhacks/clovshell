@@ -1,5 +1,5 @@
-// Code editor: transparent <textarea> over a syntax-highlighted <pre>,
-// plus a scroll-synced line-number gutter.
+// The textarea owns the complete source and native editing/scrolling. Only its
+// highlight backdrop and line-number gutter are windowed into the visible range.
 
 import type { ArchDef } from './engines';
 import { highlightAsm } from './highlight';
@@ -14,40 +14,69 @@ export interface EditorHandle {
 }
 
 export function createEditor(root: HTMLElement, initial: string, arch: ArchDef): EditorHandle {
+  const editor = root.querySelector<HTMLElement>('.editor')!;
   const gutter = root.querySelector<HTMLElement>('.gutter-scroll')!;
   const hl = root.querySelector<HTMLElement>('.hl')!;
   const ta = root.querySelector<HTMLTextAreaElement>('textarea')!;
+  const hlWindow = document.createElement('span');
+  hlWindow.className = 'hl-window';
+  hl.append(hlWindow);
 
   let currentArch = arch;
   let changeCb: (() => void) | null = null;
+  let lines: string[] = [];
+  let renderedStart = -1;
+  let renderedEnd = -1;
+  const OVERSCAN_LINES = 6;
 
-  function renderGutter(lineCount: number): void {
+  function renderGutter(start: number, end: number): void {
     const frag = document.createDocumentFragment();
-    for (let i = 1; i <= Math.max(lineCount, 1); i++) {
+    for (let i = start; i < end; i++) {
       const d = document.createElement('div');
-      d.textContent = String(i);
+      d.textContent = String(i + 1);
       frag.append(d);
     }
     gutter.replaceChildren(frag);
   }
 
-  function refresh(): void {
-    const value = ta.value;
-    hl.innerHTML = highlightAsm(value, currentArch) + '\n';
-    renderGutter(value.split('\n').length);
+  function metrics(): { lineHeight: number; paddingTop: number; paddingBottom: number } {
+    const style = getComputedStyle(ta);
+    return {
+      lineHeight: parseFloat(style.lineHeight),
+      paddingTop: parseFloat(style.paddingTop),
+      paddingBottom: parseFloat(style.paddingBottom),
+    };
   }
 
-  function syncScroll(): void {
-    hl.scrollTop = ta.scrollTop;
-    hl.scrollLeft = ta.scrollLeft;
-    gutter.style.transform = `translateY(${-ta.scrollTop}px)`;
+  function renderWindow(force = false): void {
+    const { lineHeight } = metrics();
+    const start = Math.max(0, Math.floor(ta.scrollTop / lineHeight) - OVERSCAN_LINES);
+    const end = Math.min(lines.length, Math.ceil((ta.scrollTop + ta.clientHeight) / lineHeight) + OVERSCAN_LINES);
+    if (force || start !== renderedStart || end !== renderedEnd) {
+      hlWindow.innerHTML = highlightAsm(lines.slice(start, end).join('\n'), currentArch) + '\n';
+      renderGutter(start, end);
+      renderedStart = start;
+      renderedEnd = end;
+    }
+    hlWindow.style.transform = `translate3d(${-ta.scrollLeft}px, ${start * lineHeight - ta.scrollTop}px, 0)`;
+    gutter.style.transform = `translateY(${start * lineHeight - ta.scrollTop}px)`;
+  }
+
+  function refresh(): void {
+    lines = ta.value.split('\n');
+    const { lineHeight, paddingTop, paddingBottom } = metrics();
+    const editorStyle = getComputedStyle(editor);
+    const minHeight = parseFloat(editorStyle.minHeight);
+    const maxHeight = parseFloat(editorStyle.maxHeight);
+    editor.style.height = `${Math.min(maxHeight, Math.max(minHeight, lines.length * lineHeight + paddingTop + paddingBottom))}px`;
+    renderWindow(true);
   }
 
   ta.addEventListener('input', () => {
     refresh();
     changeCb?.();
   });
-  ta.addEventListener('scroll', syncScroll);
+  ta.addEventListener('scroll', () => renderWindow(), { passive: true });
 
   // tab inserts spaces instead of moving focus
   ta.addEventListener('keydown', (e) => {
@@ -70,7 +99,6 @@ export function createEditor(root: HTMLElement, initial: string, arch: ArchDef):
     setValue(v: string) {
       ta.value = v;
       refresh();
-      syncScroll();
     },
     setArch(a: ArchDef) {
       currentArch = a;

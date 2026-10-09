@@ -536,7 +536,7 @@ select:focus-visible {
   text-align: right;
   color: var(--fg-faint);
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 20px;
   font-family: var(--mono);
   will-change: transform;
 }
@@ -551,7 +551,7 @@ select:focus-visible {
 .code-input {
   font-family: var(--mono);
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 20px;
   tab-size: 4;
   padding: 12px 14px;
   margin: 0;
@@ -573,6 +573,11 @@ select:focus-visible {
 
 .hl span {
   color: var(--fg);
+}
+
+.hl-window {
+  display: block;
+  width: max-content;
 }
 
 .tok-mnem {
@@ -1246,15 +1251,67 @@ body.dragging::after {
 .trace-selected .trace-bytes { color: var(--fg-dim); }
 .trace-registers { max-height: 310px; }
 
+.mutation-panel { border-top: 1px solid var(--border); }
+.mutation-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.mutation-head .emu-sub { margin: 0; }
+.mutation-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(220px, 1fr);
+}
+.mutation-list {
+  max-height: 300px;
+  min-height: 85px;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+}
+.mutation-row {
+  display: grid;
+  grid-template-columns: 5ch 10ch minmax(0, 1fr) 9ch;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font: 11px var(--mono);
+  cursor: pointer;
+}
+.mutation-row:hover, .mutation-row:focus-visible { background: var(--bg-hover); }
+.mutation-row.active { background: var(--accent-soft); box-shadow: inset 2px 0 var(--accent); }
+.mutation-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mutation-row .trace-address, .mutation-executed { color: var(--accent); }
+.mutation-transition { color: var(--fg-dim); }
+.mutation-detail { padding: 10px 12px; min-width: 0; }
+.mutation-title { margin-bottom: 8px; color: var(--accent); font: 11px var(--mono); }
+.mutation-field { display: grid; grid-template-columns: 12ch minmax(0, 1fr); gap: 8px; padding: 4px 0; font: 11px/1.5 var(--mono); }
+.mutation-label { color: var(--fg-dim); }
+.mutation-field code { overflow-wrap: anywhere; color: var(--fg); }
+.mutation-jumps { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+
 @media (max-width: 860px) {
   .trace-grid { grid-template-columns: 1fr; }
   .trace-list { border-right: 0; border-bottom: 1px solid var(--border); max-height: 250px; }
   .trace-head { align-items: flex-start; flex-direction: column; }
+  .mutation-grid { grid-template-columns: 1fr; }
+  .mutation-list { border-right: 0; border-bottom: 1px solid var(--border); max-height: 220px; }
 }
 
 @media (max-width: 540px) {
   .trace-row { grid-template-columns: 3ch 8ch minmax(8ch, 1fr); }
   .trace-row .trace-bytes { display: none; }
+  .mutation-row { grid-template-columns: 5ch 9ch minmax(0, 1fr); }
+  .mutation-row .mutation-executed, .mutation-row .dim { display: none; }
+  .mutation-field { grid-template-columns: 1fr; gap: 1px; }
 }
 
 /* ------------------------------------------------------------------ emulation */

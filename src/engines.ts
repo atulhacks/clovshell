@@ -3,8 +3,8 @@
 
 import MKeystone from '@alexaltea/keystone-js';
 import type { KeystoneInstance, KeystoneModule } from '@alexaltea/keystone-js';
-import { loadCapstone, Capstone } from 'capstone-wasm';
-import type { Insn } from 'capstone-wasm';
+import MCapstone from '@alexaltea/capstone-js';
+import type { CapstoneInstruction, CapstoneInstance, CapstoneModule } from '@alexaltea/capstone-js';
 import { stripComments } from './comments';
 import { stripDirectives } from './directives';
 
@@ -76,32 +76,39 @@ export function getArch(id: string): ArchDef {
 // state
 
 let keystoneMod: KeystoneModule | null = null;
-let capstoneReady = false;
+let capstoneMod: CapstoneModule | null = null;
+let capstoneLoading: Promise<void> | null = null;
 const ksInstances = new Map<string, KeystoneInstance>();
-const csInstances = new Map<string, Capstone>();
+const csInstances = new Map<string, CapstoneInstance>();
 
 export async function initEngines(
   onStage?: (stage: 'keystone' | 'capstone') => void,
+  baseURI = document.baseURI,
 ): Promise<void> {
-  if (keystoneMod && capstoneReady) return;
-  const locate = (path: string) => new URL(WASM_BASE + path, document.baseURI).href;
+  if (keystoneMod && capstoneMod) return;
+  const locate = (path: string) => new URL(WASM_BASE + path, baseURI).href;
   if (!keystoneMod) {
     keystoneMod = await MKeystone({ locateFile: locate });
     onStage?.('keystone');
   }
-  await initDisassembler();
+  await initDisassembler(baseURI);
   onStage?.('capstone');
 }
 
 export async function initDisassembler(baseURI = document.baseURI): Promise<void> {
-  if (capstoneReady) return;
+  if (capstoneMod) return;
+  if (capstoneLoading) return capstoneLoading;
   const locate = (path: string) => new URL(WASM_BASE + path, baseURI).href;
-  await loadCapstone({ locateFile: locate });
-  capstoneReady = true;
+  capstoneLoading = MCapstone({ locateFile: locate }).then((mod) => { capstoneMod = mod; });
+  try {
+    await capstoneLoading;
+  } finally {
+    capstoneLoading = null;
+  }
 }
 
 export function enginesReady(): boolean {
-  return keystoneMod !== null && capstoneReady;
+  return keystoneMod !== null && capstoneMod !== null;
 }
 
 // ---------------------------------------------------------------------------
@@ -222,17 +229,16 @@ export interface DisassembleResult {
   total: number;
 }
 
-// Capstone's bulk API allocates an instruction array inside its WASM heap,
-// while its JS wrapper copies the entire input onto the WASM stack. Bound both
-// dimensions; 4096 bytes still accommodates 256 maximum-length x86 insns.
+// Bound Capstone's bulk allocation and its JS-side instruction conversion.
 const DISASM_BATCH_INSNS = 256;
 const DISASM_BATCH_BYTES = 4096;
 const ARCH_HINT_MAX_BYTES = 256;
 
-function csInstance(arch: ArchDef): Capstone {
+function csInstance(arch: ArchDef): CapstoneInstance {
   let cs = csInstances.get(arch.id);
   if (!cs) {
-    cs = new Capstone(arch.csArch, arch.csMode);
+    if (!capstoneMod) throw new Error('capstone not loaded');
+    cs = new capstoneMod.Capstone(arch.csArch, arch.csMode);
     csInstances.set(arch.id, cs);
   }
   return cs;
@@ -249,15 +255,15 @@ function decodingArchHint(arch: ArchDef, bytes: Uint8Array): string | null {
   if (bytes.length > ARCH_HINT_MAX_BYTES) return null;
   for (const other of ARCHES) {
     if (other.id === arch.id) continue;
-    let insns: Insn[];
+    let insns: CapstoneInstruction[];
     try {
-      insns = csInstance(other).disasm(bytes, { address: 0 });
+      insns = csInstance(other).disasm(bytes, 0);
     } catch {
       continue;
     }
     if (insns.length > 0) {
       const last = insns.at(-1)!;
-      if (Number(last.address) + last.bytes.length === bytes.length) return other.label;
+      if (Number(last.address) + last.size === bytes.length) return other.label;
     }
   }
   return null;
@@ -289,25 +295,22 @@ export function disassemble(archId: string, bytes: Uint8Array, maxInsns?: number
   let consumed = 0;
   while (consumed < bytes.length && (limit === undefined || insns.length < limit)) {
     const count = Math.min(DISASM_BATCH_INSNS, limit === undefined ? DISASM_BATCH_INSNS : limit - insns.length);
-    let raw: Insn[];
+    let raw: CapstoneInstruction[];
     try {
-      raw = cs.disasm(bytes.subarray(consumed, consumed + DISASM_BATCH_BYTES), { address: address + consumed, count });
+      raw = cs.disasm(bytes.subarray(consumed, consumed + DISASM_BATCH_BYTES), address + consumed, count);
     } catch (error) {
-      // capstone-wasm throws when the next byte cannot start an instruction.
-      if (!(error instanceof Error) || !error.message.startsWith('Failed to disassemble')) {
-        const detail = error instanceof Error ? error.message : String(error);
+      const detail = error instanceof Error ? error.message : String(error);
+      if (!detail.includes('cs_disasm failed')) {
         return { ok: false, insns: [], error: `disassembler failed — ${detail}`, consumed, total: bytes.length };
       }
       break;
     }
     if (raw.length === 0) break;
     for (const i of raw) {
-      // The wrapper exposes a view into Capstone's freed WASM allocation.
-      // Copy now, before the next batch can reuse that memory.
-      insns.push({ address: Number(i.address), bytes: i.bytes.slice(), mnemonic: i.mnemonic, opStr: i.opStr });
+      insns.push({ address: Number(i.address), bytes: Uint8Array.from(i.bytes), mnemonic: i.mnemonic, opStr: i.op_str });
     }
     const last = raw.at(-1)!;
-    const next = Number(last.address) + last.bytes.length - address;
+    const next = Number(last.address) + last.size - address;
     if (next <= consumed || next > bytes.length) {
       return { ok: false, insns: [], error: 'disassembler returned an invalid instruction boundary', consumed, total: bytes.length };
     }

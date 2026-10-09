@@ -12,7 +12,7 @@ mkdirSync(dest, { recursive: true });
 
 const engines = [
   ['@alexaltea/keystone-js/dist/keystone.wasm', 'keystone.wasm'],
-  ['capstone-wasm/dist/capstone.wasm', 'capstone.wasm'],
+  ['@alexaltea/capstone-js/dist/capstone.wasm', 'capstone.wasm'],
 ];
 
 for (const [src, name] of engines) {

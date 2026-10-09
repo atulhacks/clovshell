@@ -210,6 +210,7 @@
             <span class="trace-position" id="trace-position"></span>
             <button class="btn ghost" id="trace-next" type="button" aria-label="Next instruction">next →</button>
             <button class="btn ghost" id="trace-download" type="button">save JSON</button>
+            <button class="btn ghost" id="stage-download" type="button">save runtime stage</button>
           </div>
         </div>
         <div class="trace-grid">
@@ -218,6 +219,16 @@
             <div class="trace-selected" id="trace-selected"></div>
             <h4 class="emu-sub">registers before selected instruction <span class="dim">(changes since prior step highlighted)</span></h4>
             <div class="emu-regs trace-registers" id="trace-registers"></div>
+          </div>
+        </div>
+        <div class="mutation-panel" id="mutation-panel">
+          <div class="mutation-head">
+            <h3 class="emu-sub">code mutation atlas <span class="dim">— original → written → executed</span></h3>
+            <span class="stats" id="mutation-stats"></span>
+          </div>
+          <div class="mutation-grid">
+            <div class="mutation-list" id="mutation-list" aria-label="Code mutations"></div>
+            <div class="mutation-detail" id="mutation-detail"></div>
           </div>
         </div>
       </div>

@@ -12,7 +12,7 @@ const LOCKS: Record<string, number> = { keystone: 6, capstone: 8, assemble: NAME
 
 const STATUS: Record<string, string> = {
   keystone: '// loading keystone.wasm · 4.3 MB',
-  capstone: '// loading capstone.wasm · 1.8 MB',
+  capstone: '// loading capstone.wasm · 3.3 MB',
   assemble: '// assembling',
 };
 

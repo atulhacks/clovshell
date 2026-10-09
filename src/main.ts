@@ -9,7 +9,7 @@ import {
   getArch,
   initEngines,
 } from './engines';
-import type { DisassembleResult } from './engines';
+import type { AssembleResult, DisassembleResult } from './engines';
 import {
   countBadBytes,
   countNullBytes,
@@ -25,7 +25,7 @@ import { FORMATS } from './formats';
 import { highlightInstruction } from './highlight';
 import { createEditor, editorTemplate } from './editor';
 import { entryArgReg } from './emu';
-import type { EmuResult } from './emu';
+import type { EmuMutation, EmuResult } from './emu';
 import { xorEncode } from './encoder';
 import { gadgetRows } from './gadgets';
 import type { Gadget } from './gadgets';
@@ -99,6 +99,10 @@ const tracePosition = $('#trace-position');
 const tracePrev = $<HTMLButtonElement>('#trace-prev');
 const traceNext = $<HTMLButtonElement>('#trace-next');
 const traceDownload = $<HTMLButtonElement>('#trace-download');
+const stageDownload = $<HTMLButtonElement>('#stage-download');
+const mutationStats = $('#mutation-stats');
+const mutationList = $('#mutation-list');
+const mutationDetail = $('#mutation-detail');
 const btnRunEmu = $<HTMLButtonElement>('#btn-run-emu');
 const emuArgInput = $<HTMLInputElement>('#emu-arg');
 const emuArgLabel = $('#emu-arg-label');
@@ -295,7 +299,45 @@ function renderExports(): void {
 
 // --- actions ---------------------------------------------------------------------
 
-function runAssemble(): void {
+interface AssemblyOutput { result: AssembleResult; insnCount: number }
+
+function assembleInWorker(arch: string, source: string, signal?: AbortSignal): Promise<AssemblyOutput> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new DOMException('aborted', 'AbortError')); return; }
+    const worker = new Worker(new URL('./asm-worker.ts', import.meta.url), { type: 'module' });
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      worker.terminate();
+    };
+    const abort = (): void => { cleanup(); reject(new DOMException('aborted', 'AbortError')); };
+    const timer = setTimeout(() => { cleanup(); reject(new Error('assembly timed out after 30 seconds')); }, 30_000);
+    signal?.addEventListener('abort', abort, { once: true });
+    worker.onmessage = (event: MessageEvent<AssemblyOutput | { error: string }>) => {
+      cleanup();
+      if ('error' in event.data) reject(new Error(event.data.error));
+      else resolve(event.data);
+    };
+    worker.onerror = (event) => { cleanup(); reject(new Error(event.message || 'assembly worker failed')); };
+    worker.postMessage({ archId: arch, source, baseURI: document.baseURI });
+  });
+}
+
+let asmGeneration = 0;
+let asmAbort: AbortController | null = null;
+let autoAssembleTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelAssembly(): void {
+  asmGeneration++;
+  asmAbort?.abort();
+  asmAbort = null;
+}
+
+async function runAssemble(): Promise<void> {
+  if (autoAssembleTimer !== null) clearTimeout(autoAssembleTimer);
+  autoAssembleTimer = null;
+  cancelAssembly();
+  const generation = asmGeneration;
   const src = editor.getValue().trim();
   if (!src) {
     lastAssembled = null;
@@ -311,14 +353,28 @@ function runAssemble(): void {
     setMsg(asmMsg, `✗ assembly source exceeds the ${MAX_ASM_CHARS}-character limit`, 'err');
     return;
   }
-  const res = assemble(archId, src);
+  const runArch = archId;
+  const controller = new AbortController();
+  asmAbort = controller;
+  lastAssembled = null;
+  clearBytesFrom('assembler');
+  setMsg(asmMsg, 'assembling…', '');
+  let output: AssemblyOutput;
+  try {
+    output = await assembleInWorker(runArch, src, controller.signal);
+  } catch (error) {
+    if (generation !== asmGeneration) return;
+    asmAbort = null;
+    renderShellcode(null, 0, true);
+    setMsg(asmMsg, `✗ ${error instanceof Error ? error.message : String(error)}`, 'err');
+    return;
+  }
+  if (generation !== asmGeneration || archId !== runArch || editor.getValue().trim() !== src) return;
+  asmAbort = null;
+  const { result: res, insnCount } = output;
   if (res.ok && res.bytes) {
     lastAssembled = res.bytes;
     setCurrentBytes(res.bytes, 'assembler');
-    // keystone's instruction count is unreliable around comments —
-    // count real instructions by disassembling the emitted bytes
-    const dis = disassemble(archId, res.bytes);
-    const insnCount = dis.ok ? dis.insns.length : 0;
     renderShellcode(res.bytes, insnCount);
     setMsg(
       asmMsg,
@@ -432,6 +488,87 @@ let traceArch = '';
 let selectedTraceStep = 0;
 let traceRows: HTMLButtonElement[] = [];
 let traceInstructions: string[] = [];
+let mutationRows: HTMLButtonElement[] = [];
+let selectedMutation = 0;
+
+function imageSlice(image: Uint8Array | null, base: number, address: number, size: number): Uint8Array | null {
+  const offset = address - base;
+  return image && offset >= 0 && offset + size <= image.length
+    ? image.slice(offset, offset + size) : null;
+}
+
+function mutationField(label: string, value: string): HTMLElement {
+  return el('div', { class: 'mutation-field' },
+    el('span', { class: 'mutation-label' }, label),
+    el('code', {}, value));
+}
+
+function selectMutation(index: number, focus = false): void {
+  if (!activeTrace || index < 0 || index >= activeTrace.mutations.length) return;
+  mutationRows[selectedMutation]?.classList.remove('active');
+  selectedMutation = index;
+  const row = mutationRows[index]!;
+  row.classList.add('active');
+  if (focus) row.scrollIntoView({ block: 'nearest' });
+  const mutation = activeTrace.mutations[index]!;
+  const original = imageSlice(activeTrace.initialCode, activeTrace.codeBase, mutation.addr, mutation.after.length);
+  const final = imageSlice(activeTrace.finalCode, activeTrace.codeBase, mutation.addr, mutation.after.length);
+  const first = mutation.firstExecutionStep;
+  const executed = first != null ? activeTrace.trace[first - 1] : null;
+  const jump = (label: string, step: number | null): HTMLElement => {
+    if (step == null) return el('span', { class: 'dim' }, `${label}: not observed`);
+    if (step > activeTrace!.trace.length) return el('span', { class: 'dim' }, `${label}: #${step} (beyond trace cap)`);
+    const button = el('button', { class: 'btn ghost', type: 'button' }, `${label} #${step}`);
+    button.addEventListener('click', () => selectTraceStep(step - 1, true));
+    return button;
+  };
+  mutationDetail.replaceChildren(
+    el('div', { class: 'mutation-title' }, `write ${index + 1} · ${formatAddress(mutation.addr)} · ${mutation.after.length} changed byte${mutation.after.length === 1 ? '' : 's'}`),
+    mutationField('original image', original ? toSpacedHex(original) : 'outside loaded image'),
+    mutationField('before write', toSpacedHex(mutation.before)),
+    mutationField('after write', toSpacedHex(mutation.after)),
+    mutationField('final image', final ? toSpacedHex(final) : 'unavailable'),
+    executed
+      ? mutationField('first execution', `${formatAddress(executed.addr)} · ${toSpacedHex(executed.bytes)} · ${traceInstructions[first! - 1] ?? '(undecoded)'}`)
+      : mutationField('first execution', first == null ? 'not observed' : `instruction #${first} (beyond trace cap)`),
+    el('div', { class: 'mutation-jumps' }, jump('writer', mutation.writerStep), jump('execution', first)),
+  );
+}
+
+function renderMutations(result: EmuResult | null): void {
+  mutationRows = [];
+  mutationList.replaceChildren();
+  mutationDetail.replaceChildren();
+  if (!result) {
+    mutationStats.textContent = '';
+    return;
+  }
+  const executed = result.mutations.filter((mutation) => mutation.firstExecutionStep !== null).length;
+  mutationStats.textContent = `${result.mutations.length} writes · ${executed} executed${result.mutationsTruncated ? ' · capture limited' : ''}`;
+  stageDownload.disabled = result.finalCode === null;
+  if (!result.mutations.length) {
+    mutationList.append(el('div', { class: 'listing-empty' }, '// no changes to the loaded code region'));
+    mutationDetail.append(el('div', { class: 'listing-empty' }, 'No changes to the loaded code image were observed.'));
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  result.mutations.forEach((mutation: EmuMutation, index) => {
+    const row = el('button', { class: 'mutation-row', type: 'button',
+      'aria-label': `Mutation ${index + 1} at ${formatAddress(mutation.addr)}, written by instruction ${mutation.writerStep}` },
+      el('span', { class: 'trace-num' }, `#${index + 1}`),
+      el('span', { class: 'trace-address' }, formatAddress(mutation.addr)),
+      el('span', { class: 'mutation-transition' }, `${toSpacedHex(mutation.before)} → ${toSpacedHex(mutation.after)}`),
+      el('span', { class: mutation.firstExecutionStep == null ? 'dim' : 'mutation-executed' },
+        mutation.firstExecutionStep == null ? 'not run' : `ran #${mutation.firstExecutionStep}`),
+    );
+    row.addEventListener('click', () => selectMutation(index));
+    fragment.append(row);
+    mutationRows.push(row);
+  });
+  mutationList.append(fragment);
+  selectedMutation = 0;
+  selectMutation(0);
+}
 
 function selectTraceStep(index: number, focus = false): void {
   if (!activeTrace || index < 0 || index >= activeTrace.trace.length) return;
@@ -478,7 +615,10 @@ function renderTrace(result: EmuResult | null): void {
   traceSelected.replaceChildren();
   traceRows = [];
   traceInstructions = [];
-  if (!result || result.trace.length === 0) return;
+  if (!result || result.trace.length === 0) {
+    renderMutations(result);
+    return;
+  }
 
   traceArch = archId;
   traceStats.textContent = result.traceTruncated
@@ -504,6 +644,7 @@ function renderTrace(result: EmuResult | null): void {
   traceList.append(fragment);
   selectedTraceStep = 0;
   selectTraceStep(0);
+  renderMutations(result);
 }
 
 tracePrev.addEventListener('click', () => selectTraceStep(selectedTraceStep - 1, true));
@@ -524,6 +665,19 @@ traceDownload.addEventListener('click', () => {
     exit: activeTrace.exit,
     syscalls: activeTrace.syscalls,
     finalRegisters: Object.fromEntries(activeTrace.registers.map((reg) => [reg.name, reg.value])),
+    codeBase: formatAddress(activeTrace.codeBase),
+    initialCode: toHex(activeTrace.initialCode),
+    finalCode: activeTrace.finalCode ? toHex(activeTrace.finalCode) : null,
+    mutationsTruncated: activeTrace.mutationsTruncated,
+    mutations: activeTrace.mutations.map((mutation) => ({
+      writerStep: mutation.writerStep,
+      writerAddress: formatAddress(mutation.writerAddr),
+      address: formatAddress(mutation.addr),
+      before: toHex(mutation.before),
+      after: toHex(mutation.after),
+      firstExecutionStep: mutation.firstExecutionStep,
+      firstExecutionAddress: mutation.firstExecutionAddr == null ? null : formatAddress(mutation.firstExecutionAddr),
+    })),
     trace: activeTrace.trace.map((step, index) => ({
       number: index + 1,
       address: formatAddress(step.addr),
@@ -533,6 +687,9 @@ traceDownload.addEventListener('click', () => {
     })),
   };
   downloadText(`trace-${traceArch}.json`, JSON.stringify(data, null, 2), 'application/json');
+});
+stageDownload.addEventListener('click', () => {
+  if (activeTrace?.finalCode) downloadBytes(`runtime-stage-${traceArch}.bin`, activeTrace.finalCode);
 });
 
 function renderEmu(result: EmuResult | null): void {
@@ -607,25 +764,27 @@ async function runEmu(): Promise<void> {
     toast(`assembly source exceeds the ${MAX_ASM_CHARS}-character limit`);
     return;
   }
-  const res = assemble(runArch, src);
-  if (!res.ok || !res.bytes) {
-    toast('fix the assembly errors first');
-    return;
-  }
-  if (res.bytes.length === 0) {
-    toast('source emits no bytes');
-    return;
-  }
   emuBusy = true;
   btnRunEmu.disabled = true;
   btnRunEmu.textContent = '… running';
-  setMsg(emuMsg, 'loading unicorn engine (first run downloads ~1 MB)…', '');
+  setMsg(emuMsg, 'assembling…', '');
   try {
+    const { result: res } = await assembleInWorker(runArch, src);
+    if (archId !== runArch || editor.getValue().trim() !== src) return;
+    if (!res.ok || !res.bytes) {
+      toast('fix the assembly errors first');
+      return;
+    }
+    if (res.bytes.length === 0) {
+      toast('source emits no bytes');
+      return;
+    }
     const arg = parseEntryArg();
     if (arg && 'error' in arg) {
       setMsg(emuMsg, `✗ ${arg.error}`, 'err');
       return;
     }
+    setMsg(emuMsg, 'loading unicorn engine (first run downloads ~1 MB)…', '');
     const result = await runEmulationInWorker(runArch, res.bytes, arg ? arg.value : null);
     if (archId === runArch && editor.getValue().trim() === src) {
       setChip(chipUnicorn, 'ok');
@@ -1037,19 +1196,24 @@ function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: number): (.
   };
 }
 
-const autoAssemble = debounce(() => {
-  if (enginesReady()) runAssemble();
-}, 350);
-
 const autoDisassemble = debounce(() => {
   if (enginesReady()) runDisassemble();
 }, 350);
 
 editor.onChange(() => {
+  cancelAssembly();
+  lastAssembled = null;
+  clearBytesFrom('assembler');
+  renderShellcode(null, 0);
+  setMsg(asmMsg, 'source changed — assembling…', '');
   saveState();
   renderEmu(null);
   invalidateDerivedViews();
-  autoAssemble();
+  if (autoAssembleTimer !== null) clearTimeout(autoAssembleTimer);
+  autoAssembleTimer = setTimeout(() => {
+    autoAssembleTimer = null;
+    if (enginesReady()) void runAssemble();
+  }, 350);
 });
 
 hexInput.addEventListener('input', () => {
@@ -1096,6 +1260,11 @@ $('#btn-copy-shellcode').addEventListener('click', async () => {
 });
 
 archSelect.addEventListener('change', () => {
+  cancelAssembly();
+  lastAssembled = null;
+  clearBytesFrom('assembler');
+  renderShellcode(null, 0);
+  setMsg(asmMsg, 'architecture changed — assembling…', '');
   archId = archSelect.value;
   invalidateDerivedViews();
   editor.setArch(getArch(archId));
@@ -1199,12 +1368,12 @@ renderPresets();
 applyBadChars();
 
 initEngines((stage) => bootStage(stage))
-  .then(() => {
+  .then(async () => {
     setChip(chipKeystone, 'ok');
     setChip(chipCapstone, 'ok');
     btnAssemble.disabled = false;
     btnDisassemble.disabled = false;
-    runAssemble();
+    await runAssemble();
     runDisassemble();
     bootStage('assemble');
     bootDone();

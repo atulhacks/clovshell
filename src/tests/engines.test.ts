@@ -166,9 +166,8 @@ describe('disassemble', () => {
   });
 
   it('suggests the right arch when nothing decodes', () => {
-    // b8 0b 00 00 00 cd 80 = valid x86 (mov eax, 11 ; int 0x80), invalid as arm64.
-    // x86-64 comes first in ARCHES and also decodes it fully, so it wins the hint.
-    const res = disassemble('arm64', Uint8Array.from([0xb8, 0x0b, 0x00, 0x00, 0x00, 0xcd, 0x80]));
+    // A lone x86 ret is shorter than any ARM64 instruction.
+    const res = disassemble('arm64', Uint8Array.from([0xc3]));
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/decode cleanly as x86-64/);
   });

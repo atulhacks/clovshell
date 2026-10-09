@@ -15,9 +15,9 @@
     "test:e2e": "npm run build && playwright test"
   },
   "dependencies": {
+    "@alexaltea/capstone-js": "5.0.9",
     "@alexaltea/keystone-js": "^0.9.2",
-    "@alexaltea/unicorn-js": "^2.1.4",
-    "capstone-wasm": "^1.0.3"
+    "@alexaltea/unicorn-js": "^2.1.4"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

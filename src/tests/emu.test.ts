@@ -20,6 +20,8 @@ describe('runEmulation', () => {
     expect(result.trace[0]?.bytes.length).toBe(result.trace[0]?.size);
     expect(result.trace[0]?.registers).toHaveLength(result.registers.length);
     expect(result.traceTruncated).toBe(false);
+    expect(result.mutations).toHaveLength(0);
+    expect(result.finalCode).toEqual(result.initialCode);
     expect(result.syscalls).toHaveLength(1);
     expect(result.exit).toMatch(preset.id.startsWith('execve') ? /execve/ : /exit/);
   });
@@ -40,6 +42,19 @@ describe('runEmulation', () => {
     expect(result.trace[0]?.registers[rax]).toBe('0x0');
     expect(result.trace[1]?.registers[rax]).toBe('0x2a');
     expect(result.trace[1]?.addr).toBe(0x10005);
+  });
+
+  it('does not report a code write when the bytes do not change', async () => {
+    const source = [
+      'mov byte ptr [rip + target], 0x90',
+      'target:', 'nop',
+      'xor edi, edi', 'mov eax, 60', 'syscall',
+    ].join('\n');
+    const assembled = assemble('x86-64', source);
+    expect(assembled.ok, assembled.error ?? undefined).toBe(true);
+    const result = await runEmulation('x86-64', assembled.bytes!);
+    expect(result.exit).toBe('exit(0)');
+    expect(result.mutations).toHaveLength(0);
   });
 
   it('bounds long traces without stopping execution', async () => {
@@ -169,6 +184,14 @@ describe('runEmulation', () => {
         step.bytes.length === firstPayloadInsn.bytes.length
         && step.bytes.every((byte, i) => byte === firstPayloadInsn.bytes[i]),
       ), `${arch}: trace should contain decoded payload bytes`).toBe(true);
+      expect(result.mutations.length, `${arch}: decoder must mutate code`).toBeGreaterThan(0);
+      expect(result.mutationsTruncated).toBe(false);
+      expect(result.mutations.some((change) => change.firstExecutionStep !== null),
+        `${arch}: mutated bytes must execute`).toBe(true);
+      expect(result.mutations.every((change) => change.writerStep > 0 && change.writerAddr >= result.codeBase),
+        `${arch}: every change has a writer`).toBe(true);
+      expect(result.finalCode).not.toEqual(result.initialCode);
+      expect(result.finalCode?.slice(-payload.length)).toEqual(payload);
     },
   );
 });

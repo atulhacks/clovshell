@@ -41,6 +41,7 @@ declare module '@alexaltea/unicorn-js/x86' {
     HOOK_INTR: number;
     HOOK_INSN: number;
     HOOK_CODE: number;
+    HOOK_MEM_WRITE: number;
     HOOK_MEM_INVALID: number;
     // x86 insn ids for HOOK_INSN
     X86_INS_SYSCALL: number;
@@ -93,6 +94,7 @@ declare module '@alexaltea/unicorn-js/arm' {
     MODE_LITTLE_ENDIAN: number;
     HOOK_INTR: number;
     HOOK_CODE: number;
+    HOOK_MEM_WRITE: number;
     HOOK_MEM_INVALID: number;
     ARM_REG_R0: number;
     ARM_REG_R1: number;
@@ -131,6 +133,7 @@ declare module '@alexaltea/unicorn-js/aarch64' {
     MODE_ARM: number;
     HOOK_INTR: number;
     HOOK_CODE: number;
+    HOOK_MEM_WRITE: number;
     HOOK_MEM_INVALID: number;
     ARM64_REG_X0: number;
     ARM64_REG_X1: number;

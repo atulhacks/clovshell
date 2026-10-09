@@ -69,6 +69,18 @@ export interface EmuStep {
   registers: string[];
 }
 
+export interface EmuMutation {
+  /** one-based instruction number responsible for this write */
+  writerStep: number;
+  writerAddr: number;
+  addr: number;
+  before: Uint8Array;
+  after: Uint8Array;
+  /** first subsequent instruction whose fetched bytes overlap this write */
+  firstExecutionStep: number | null;
+  firstExecutionAddr: number | null;
+}
+
 export interface EmuResult {
   ok: boolean;
   steps: number;
@@ -79,6 +91,11 @@ export interface EmuResult {
   /** instruction trace (first TRACE_CAP instructions) */
   trace: EmuStep[];
   traceTruncated: boolean;
+  mutations: EmuMutation[];
+  mutationsTruncated: boolean;
+  codeBase: number;
+  initialCode: Uint8Array;
+  finalCode: Uint8Array | null;
   error?: string;
 }
 
@@ -95,6 +112,8 @@ const MMAP_BASE = 0x30000000; // where fake mmap() allocations live
 
 const STEP_LIMIT = 100_000;
 const TRACE_CAP = 400;
+const MUTATION_CAP = 2048;
+const MUTATION_BYTES_CAP = 256;
 // NOTE: emu_start's timeout parameter must stay 0 — unicorn implements timeouts
 // with a QEMU timer thread, which aborts under WASM ("qemu_thread_create: Not
 // supported"). Runaway loops are caught by the HOOK_CODE step counter instead.
@@ -424,8 +443,12 @@ export async function runEmulation(
   const byNum = new Map(table.map((s) => [s.num, s.name]));
 
   const trace: EmuStep[] = [];
+  const mutations: EmuMutation[] = [];
+  const pendingWrites: { addr: number; before: Uint8Array; writerStep: number; writerAddr: number }[] = [];
   let steps = 0;
+  let currentInstructionAddr = CODE;
   let traceTruncated = false;
+  let mutationsTruncated = false;
   let exitReason = 'fell off the end of the shellcode';
   let stopped = false;
 
@@ -509,6 +532,32 @@ export async function runEmulation(
     },
   };
 
+  const settleWrites = (): void => {
+    for (const write of pendingWrites) {
+      let after: Uint8Array;
+      try {
+        after = Uint8Array.from(e.mem_read(write.addr, write.before.length));
+      } catch {
+        continue;
+      }
+      let start = 0;
+      while (start < after.length && after[start] === write.before[start]) start++;
+      if (start === after.length) continue;
+      let end = after.length;
+      while (end > start && after[end - 1] === write.before[end - 1]) end--;
+      mutations.push({
+        writerStep: write.writerStep,
+        writerAddr: write.writerAddr,
+        addr: write.addr + start,
+        before: write.before.slice(start, end),
+        after: after.slice(start, end),
+        firstExecutionStep: null,
+        firstExecutionAddr: null,
+      });
+    }
+    pendingWrites.length = 0;
+  };
+
   // --- syscall hooks
   const handleSyscall = (): void => {
     const num = Number(getReg(glue.syscallNumReg));
@@ -533,18 +582,39 @@ export async function runEmulation(
   let limitReached = false;
   e.hook_add(uc.HOOK_CODE!, (_h: unknown, addr: bigint, size: number) => {
     const a = Number(addr);
+    settleWrites();
     if (a === SENTINEL) {
       ctx.stop('returned from the shellcode');
       return;
     }
     steps++;
-    if (trace.length < TRACE_CAP) {
-      let instructionBytes: Uint8Array;
+    currentInstructionAddr = a;
+    let instructionBytes = new Uint8Array(0);
+    if (trace.length < TRACE_CAP || mutations.some((m) => m.firstExecutionStep === null)) {
       try {
         instructionBytes = Uint8Array.from(e.mem_read(a, size));
       } catch {
-        instructionBytes = new Uint8Array(0);
+        // A fetch fault is reported by the invalid-memory hook.
       }
+    }
+    for (const mutation of mutations) {
+      if (mutation.firstExecutionStep !== null) continue;
+      const start = Math.max(a, mutation.addr);
+      const end = Math.min(a + instructionBytes.length, mutation.addr + mutation.after.length);
+      if (end <= start) continue;
+      let matches = true;
+      for (let address = start; address < end; address++) {
+        if (instructionBytes[address - a] !== mutation.after[address - mutation.addr]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        mutation.firstExecutionStep = steps;
+        mutation.firstExecutionAddr = a;
+      }
+    }
+    if (trace.length < TRACE_CAP) {
       trace.push({
         addr: a,
         size,
@@ -557,6 +627,30 @@ export async function runEmulation(
       ctx.stop(`instruction limit (${STEP_LIMIT}) hit — infinite loop?`);
     }
   });
+
+  // Unicorn's memory-write callback runs before the store. Compare bytes at
+  // the next instruction boundary rather than trusting its scalar value.
+  e.hook_add(uc.HOOK_MEM_WRITE!, (_h: unknown, _type: number, addr: bigint, size: number) => {
+    const a = Number(addr);
+    const start = Math.max(a, CODE);
+    const end = Math.min(a + size, CODE + bytes.length);
+    if (end <= start || !Number.isSafeInteger(a)) return;
+    if (mutations.length + pendingWrites.length >= MUTATION_CAP) {
+      mutationsTruncated = true;
+      return;
+    }
+    if (end - start > MUTATION_BYTES_CAP) mutationsTruncated = true;
+    try {
+      pendingWrites.push({
+        addr: start,
+        before: Uint8Array.from(e.mem_read(start, Math.min(end - start, MUTATION_BYTES_CAP))),
+        writerStep: steps,
+        writerAddr: currentInstructionAddr,
+      });
+    } catch {
+      // An invalid write is reported separately by HOOK_MEM_INVALID.
+    }
+  }, null, CODE, CODE + Math.max(bytes.length - 1, 0));
 
   // --- fault reporting
   const memType = (t: number): string =>
@@ -581,6 +675,12 @@ export async function runEmulation(
       exitReason = 'emulation error';
     }
   }
+  settleWrites();
+
+  let finalCode: Uint8Array | null = null;
+  try {
+    finalCode = Uint8Array.from(e.mem_read(CODE, bytes.length));
+  } catch { /* Code may have been unmapped by the program. */ }
 
   // registers after the run
   const registers: EmuReg[] = glue.regOrder.map((n) => {
@@ -605,6 +705,11 @@ export async function runEmulation(
     exit: exitReason,
     trace,
     traceTruncated,
+    mutations,
+    mutationsTruncated,
+    codeBase: CODE,
+    initialCode: Uint8Array.from(bytes),
+    finalCode,
     error,
   };
   // a hook-aborted run can leave the wasm instance in a state where close()

@@ -53,6 +53,10 @@ and Capstone WASM files into `public/wasm/` through `postinstall`.
 - Step through the first **400 executed instructions**, including the bytes fetched from emulated
   memory (useful for self-modifying code) and registers captured before each instruction. Navigate
   with buttons or arrow keys, or save the trace as JSON.
+- Inspect the **Code Mutation Atlas** for writes to the loaded code image: original bytes, pre/post
+  write bytes, the writing instruction, and the first observed execution of changed bytes. Download
+  the final code-image snapshot as `.bin` or the trace and mutation evidence as JSON. Capture is
+  bounded to 2,048 writes; the atlas does not yet follow code generated in new mappings.
 - Set an initial first-argument register (`rdi`, `r0`, or `x0`) for function-style shellcode.
 - Keep the UI responsive with worker-based emulation, a 30-second outer timeout, and a
   100,000-instruction limit.

@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 async function openWorkbench(page: Page): Promise<void> {
   await page.goto('/');
@@ -43,6 +44,89 @@ test('superseded decode cannot overwrite newer input', async ({ page, browserNam
   await page.locator('#hex-input').fill('c3');
   await expect(page.locator('#hex-msg')).toContainText('decoded 1 instruction');
   await expect(page.locator('#disasm-listing .row')).toHaveCount(1);
+});
+
+test('superseded assembly cannot overwrite newer source', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'worker cancellation regression runs once on desktop Chromium');
+  await openWorkbench(page);
+  const editor = page.locator('#asm-editor-host textarea');
+  await editor.fill('nop\n'.repeat(500));
+  await page.locator('#btn-assemble').click();
+  await editor.fill('ret');
+  await page.locator('#btn-assemble').click();
+  await expect(page.locator('#asm-msg')).toContainText('assembled 1 instruction');
+  await expect(page.locator('#shellcode-out')).toContainText('c3');
+});
+
+test('large assembly source keeps the editor window bounded while scrolling', async ({ page }) => {
+  await openWorkbench(page);
+  const editor = page.locator('#asm-editor-host textarea');
+  const source = 'nop\n'.repeat(11_999) + 'ret';
+  await page.evaluate((value) => {
+    const input = document.querySelector<HTMLTextAreaElement>('#asm-editor-host textarea')!;
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }, source);
+  await expect.poll(() => page.locator('#asm-editor-host .gutter-scroll > div').count()).toBeLessThan(60);
+  expect(await editor.evaluate((node) => node.value.length)).toBe(source.length);
+  await editor.evaluate((node) => { node.scrollTop = node.scrollHeight; node.dispatchEvent(new Event('scroll')); });
+  await expect(page.locator('#asm-editor-host .gutter-scroll > div').last()).toHaveText('12000');
+  await expect(page.locator('#asm-editor-host .hl-window')).toContainText('ret');
+  await expect.poll(() => page.locator('#asm-editor-host .gutter-scroll > div').count()).toBeLessThan(60);
+  await editor.evaluate((node) => { node.focus(); node.setSelectionRange(node.value.length, node.value.length); });
+  await page.keyboard.insertText('\nnop');
+  await expect(page.locator('#asm-editor-host .gutter-scroll > div').last()).toHaveText('12001');
+  expect(await editor.evaluate((node) => node.value.endsWith('\nnop'))).toBe(true);
+});
+
+test('runs assembled code through the emulator on every architecture', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'emulator browser regression runs once on desktop Chromium');
+  await openWorkbench(page);
+  const cases = [
+    { arch: 'x86-64', source: 'mov rdi, 42\nmov rax, 60\nsyscall' },
+    { arch: 'x86-32', source: 'xor ebx, ebx\nmov al, 1\nint 0x80' },
+    { arch: 'arm', source: 'mov r7, #1\nmov r0, #0\nsvc 0' },
+    { arch: 'arm64', source: 'mov x8, #94\nmov x0, #0\nsvc 0' },
+  ];
+  for (const item of cases) {
+    await page.locator('#arch-select').selectOption(item.arch);
+    await page.locator('#asm-editor-host textarea').fill(item.source);
+    await page.locator('#btn-run-emu').click();
+    await expect(page.locator('#emu-msg')).toContainText('steps ·');
+    await expect(page.locator('#emu-msg')).not.toContainText('✗');
+  }
+});
+
+test('shows decoder writes and exports the reconstructed runtime stage', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'mutation atlas browser regression runs once on desktop Chromium');
+  await openWorkbench(page);
+  await page.locator('#asm-editor-host textarea').fill('xor edi, edi\nmov eax, 60\nsyscall');
+  await page.locator('#btn-assemble').click();
+  await expect(page.locator('#asm-msg')).toContainText('assembled');
+  await page.locator('#btn-encode').click();
+  await expect(page.locator('#enc-preview')).not.toHaveClass(/empty/);
+  await page.locator('#btn-encode-load').click();
+  await expect(page.locator('#emu-msg')).toContainText('exit(0)');
+  await expect(page.locator('#mutation-stats')).toContainText('executed');
+  await expect(page.locator('#mutation-list .mutation-row').first()).toBeVisible();
+  await expect(page.locator('#mutation-detail')).toContainText('original image');
+  await expect(page.locator('#mutation-detail')).toContainText('first execution');
+  const stagePromise = page.waitForEvent('download');
+  await page.locator('#stage-download').click();
+  const stage = await stagePromise;
+  expect(stage.suggestedFilename()).toBe('runtime-stage-x86-64.bin');
+  expect((await readFile(await stage.path())).toString('hex')).toContain('31ffb83c0000000f05');
+  const evidencePromise = page.waitForEvent('download');
+  await page.locator('#trace-download').click();
+  const evidence = await evidencePromise;
+  expect(evidence.suggestedFilename()).toBe('trace-x86-64.json');
+  const report = JSON.parse(await readFile(await evidence.path(), 'utf8')) as {
+    mutations: { writerStep: number; firstExecutionStep: number | null }[];
+    finalCode: string;
+  };
+  expect(report.mutations.length).toBeGreaterThan(0);
+  expect(report.mutations.some((mutation) => mutation.writerStep > 0 && mutation.firstExecutionStep != null)).toBe(true);
+  expect(report.finalCode).toContain('31ffb83c0000000f05');
 });
 
 test('reloads and runs offline after installation', async ({ page, context, browserName }) => {
