@@ -33,6 +33,7 @@ function optionsFrom(args) {
 }
 
 function median(values) {
+  if (!values.length) return null;
   const sorted = [...values].sort((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
@@ -68,6 +69,15 @@ try {
         const button = document.querySelector('#btn-assemble');
         return button instanceof HTMLButtonElement && !button.disabled;
       }, null, { timeout: 90_000 });
+      const readyMs = await page.evaluate(() => Math.round(performance.now()));
+      const hasSource = await page.evaluate(() => Boolean(document.querySelector('#asm-editor-host textarea')?.value.trim()));
+      if (hasSource) {
+        await page.waitForFunction(() => {
+          const message = document.querySelector('#asm-msg')?.textContent ?? '';
+          return message.startsWith('✓ assembled') || message.startsWith('✗');
+        }, null, { timeout: 90_000 });
+      }
+      const firstAssemblyMs = hasSource ? await page.evaluate(() => Math.round(performance.now())) : null;
       const timing = await page.evaluate(() => {
         const navigation = performance.getEntriesByType('navigation')[0];
         const assets = performance.getEntriesByType('resource')
@@ -81,12 +91,11 @@ try {
             decodedBodyBytes: entry.decodedBodySize,
           }));
         return {
-          readyMs: Math.round(performance.now()),
           domContentLoadedMs: Math.round(navigation?.domContentLoadedEventEnd ?? 0),
           assets,
         };
       });
-      samples.push({ ...timing, pageErrors: errors });
+      samples.push({ readyMs, firstAssemblyMs, ...timing, pageErrors: errors });
     } finally {
       await context.close();
     }
@@ -101,6 +110,7 @@ const report = {
   profile: { samples: options.samples, mbps: options.mbps, latencyMs: options.latencyMs,
     browser: 'Playwright Chromium', cache: 'disabled', serviceWorkers: 'blocked' },
   medianReadyMs: median(samples.map((sample) => sample.readyMs)),
+  medianFirstAssemblyMs: median(samples.flatMap((sample) => sample.firstAssemblyMs == null ? [] : [sample.firstAssemblyMs])),
   samples,
 };
 const json = JSON.stringify(report, null, 2) + '\n';

@@ -48,6 +48,7 @@ import {
 const STORAGE_KEY = 'clovshell:session:v2';
 const LEGACY_STORAGE_KEY = 'clovshell:v1';
 const MAX_ASM_CHARS = 64 * 1024;
+const BOOT_INLINE_ASM_CHARS = 512;
 
 const SAMPLE = `; clovshell — assemble me (ctrl/cmd + enter)
 mov eax, 0x64696b73
@@ -378,7 +379,7 @@ function cancelAssembly(): void {
   asmAbort = null;
 }
 
-async function runAssemble(): Promise<void> {
+async function runAssemble(inlineBootSample = false): Promise<void> {
   if (autoAssembleTimer !== null) clearTimeout(autoAssembleTimer);
   autoAssembleTimer = null;
   cancelAssembly();
@@ -406,7 +407,13 @@ async function runAssemble(): Promise<void> {
   setMsg(asmMsg, 'assembling…', '');
   let output: AssemblyOutput;
   try {
-    output = await assembleInWorker(runArch, src, controller.signal);
+    if (inlineBootSample && src.length <= BOOT_INLINE_ASM_CHARS) {
+      const result = assemble(runArch, src);
+      const decoded = result.bytes ? disassemble(runArch, result.bytes) : null;
+      output = { result, insnCount: decoded?.ok ? decoded.insns.length : 0 };
+    } else {
+      output = await assembleInWorker(runArch, src, controller.signal);
+    }
   } catch (error) {
     if (generation !== asmGeneration) return;
     asmAbort = null;
@@ -2017,7 +2024,7 @@ hexInput.addEventListener('input', () => {
   autoDisassemble();
 });
 
-btnAssemble.addEventListener('click', runAssemble);
+btnAssemble.addEventListener('click', () => void runAssemble());
 btnDisassemble.addEventListener('click', runDisassemble);
 
 $('#btn-clear-asm').addEventListener('click', () => {
@@ -2185,7 +2192,7 @@ initEngines((stage) => bootStage(stage))
     setChip(chipCapstone, 'ok');
     btnAssemble.disabled = false;
     btnDisassemble.disabled = false;
-    await runAssemble();
+    await runAssemble(true);
     runDisassemble();
     bootStage('assemble');
     bootDone();

@@ -176,3 +176,48 @@ test('syscall reference loads on demand and tracks the active architecture', asy
   await page.locator('#arch-select').selectOption('x86-64');
   await expect(page.locator('#syscall-list .syscall-item').first()).toContainText('60');
 });
+
+test('small boot source assembles inline while later edits keep the worker path', async ({ browser }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'cold-start assembly path regression');
+  const context = await browser.newContext({ serviceWorkers: 'block' });
+  try {
+    const page = await context.newPage();
+    const workerRequests: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().includes('asm-worker')) workerRequests.push(request.url());
+    });
+    await page.goto('/');
+    await expect(page.locator('#btn-assemble')).toBeEnabled();
+    await expect(page.locator('#asm-msg')).toContainText('assembled');
+    expect(workerRequests).toHaveLength(0);
+    await page.locator('#asm-editor-host textarea').fill('nop\nret');
+    await expect.poll(() => workerRequests.length).toBeGreaterThan(0);
+    await expect(page.locator('#asm-msg')).toContainText('assembled 2 instructions');
+  } finally {
+    await context.close();
+  }
+});
+
+test('large restored source uses the assembly worker at boot', async ({ browser }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'cold-start assembly threshold regression');
+  const context = await browser.newContext({ serviceWorkers: 'block' });
+  try {
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem('clovshell:session:v2', JSON.stringify({
+        v: 2,
+        arch: 'x86-64',
+        a: 'nop\n'.repeat(200),
+      }));
+    });
+    const workerRequests: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().includes('asm-worker')) workerRequests.push(request.url());
+    });
+    await page.goto('/');
+    await expect(page.locator('#asm-msg')).toContainText('assembled 200 instructions');
+    expect(workerRequests.length).toBeGreaterThan(0);
+  } finally {
+    await context.close();
+  }
+});
