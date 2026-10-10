@@ -25,10 +25,14 @@ export interface FlowGraph {
   nodes: FlowNode[];
   edges: FlowEdge[];
   truncated: boolean;
+  /** First observed instruction sequence, expressed as node IDs. */
+  path: number[];
+  pathTruncated: boolean;
 }
 
 export const FLOW_NODE_CAP = 4096;
 export const FLOW_EDGE_CAP = 8192;
+export const FLOW_PATH_CAP = 8192;
 
 function byteKey(bytes: Uint8Array): string {
   let key = '';
@@ -44,6 +48,8 @@ export class FlowCollector {
   private readonly edgeIds = new Map<string, number>();
   private previousId: number | null = null;
   private truncated = false;
+  private readonly path: number[] = [];
+  private pathTruncated = false;
 
   constructor(
     private readonly nodeCap = FLOW_NODE_CAP,
@@ -56,6 +62,7 @@ export class FlowCollector {
     if (id === undefined) {
       if (this.nodes.length >= this.nodeCap) {
         this.truncated = true;
+        this.pathTruncated = true;
         this.previousId = null;
         return;
       }
@@ -66,6 +73,8 @@ export class FlowCollector {
     const node = this.nodes[id]!;
     node.hits++;
     node.lastStep = step;
+    if (this.path.length < FLOW_PATH_CAP) this.path.push(id);
+    else this.pathTruncated = true;
 
     if (this.previousId !== null) {
       const edgeKey = `${this.previousId}:${id}`;
@@ -88,7 +97,8 @@ export class FlowCollector {
   }
 
   result(): FlowGraph {
-    return { nodes: this.nodes, edges: this.edges, truncated: this.truncated };
+    return { nodes: this.nodes, edges: this.edges, truncated: this.truncated,
+      path: this.path, pathTruncated: this.pathTruncated };
   }
 }
 

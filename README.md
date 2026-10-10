@@ -63,6 +63,12 @@ and Capstone WASM files into `public/wasm/` through `postinstall`.
   Filter transfers or inspect every edge; the complete bounded graph is included in JSON export.
   Nodes are distinct by address, instruction bytes, mode and stage, so re-executed rewritten code
   is not conflated with its earlier version. Capture is capped at 4,096 nodes and 8,192 edges.
+- Use the **Path Divergence Lab** to replay up to eight entry-argument values against fresh emulator
+  instances. It reports new edges, the first differing instruction, exit behavior, and a selectable
+  trace for each run. Comparisons keep the first 8,192 executed instructions; limits are shown when
+  reached. x86-32 receives its first argument at `[esp+4]`; the other targets use `rdi`, `r0`, or `x0`.
+- Supply a hex **input fixture** (up to 4 KiB) to `read` on stdin or to `recv`/`recvfrom`. Successive
+  reads consume the same bytes. The fixture works with both a single run and scenario exploration.
 - Inspect the **Code Mutation Atlas** for writes to the loaded code image: original bytes, pre/post
   write bytes, the writing instruction, and the first observed execution of changed bytes. Download
   the final code-image snapshot as `.bin` or the trace and mutation evidence as JSON. Image mutations
@@ -79,7 +85,7 @@ and Capstone WASM files into `public/wasm/` through `postinstall`.
   beyond the main 400-step trace; the JSON export includes
   the snapshots, diff counts, and transition context. Fresh mappings and the initial stack/code
   slack are explicitly zeroed so successive emulation runs cannot inherit stale WASM memory.
-- Set an initial first-argument register (`rdi`, `r0`, or `x0`) for function-style shellcode.
+- Set an initial first argument for function-style shellcode.
 - Keep the UI responsive with worker-based emulation, a 30-second outer timeout, and a
   100,000-instruction limit.
 
@@ -111,6 +117,9 @@ mode; for A32/Thumb mixed-mode programs, import an already assembled binary or p
 The emulator stops on unmapped memory faults. Returning shellcode lands on a sentinel instead of
 continuing into unrelated memory. Its instruction trace is capped at 400 entries even when the
 program executes longer. Gadget searches are likewise bounded to keep large inputs responsive.
+Path exploration is deterministic replay of specified inputs, not symbolic execution or an
+unbounded fuzzer. It cannot discover paths that require unmodeled OS behavior. Other file reads
+still return EOF, and the input fixture is one shared stream rather than a full socket model.
 
 ## Build, test, and deploy
 

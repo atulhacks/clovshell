@@ -1275,6 +1275,49 @@ body.dragging::after {
 .flow-row .flow-count, .flow-row .trace-address { color: var(--accent); }
 .flow-kind { color: var(--fg-dim); }
 
+.scenario-panel { border-top: 1px solid var(--border); }
+.scenario-actions { display: flex; gap: 6px; }
+.scenario-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.scenario-controls label { display: grid; gap: 5px; color: var(--fg); font: 11px var(--mono); }
+.scenario-controls input {
+  min-width: 0;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 11px var(--mono);
+}
+.scenario-results { max-height: 280px; overflow: auto; }
+.scenario-row {
+  display: grid;
+  grid-template-columns: 11ch 18ch minmax(16ch, 1fr) minmax(12ch, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font: 11px var(--mono);
+  cursor: pointer;
+}
+.scenario-row:hover, .scenario-row:focus-visible { background: var(--bg-hover); }
+.scenario-row.active { background: var(--accent-soft); box-shadow: inset 2px 0 var(--accent); }
+.scenario-value, .scenario-diff { color: var(--accent); }
+.scenario-row span { min-width: 0; overflow-wrap: anywhere; }
+.scenario-exit { color: var(--fg-dim); }
+.scenario-error { padding: 8px 10px; color: var(--fg-dim); font: 11px var(--mono); }
+
 .mutation-panel { border-top: 1px solid var(--border); }
 .mutation-head {
   display: flex;
@@ -1408,6 +1451,9 @@ button.stage-context-row:hover, button.stage-context-row:focus-visible { backgro
 }
 
 @media (max-width: 540px) {
+  .scenario-controls { grid-template-columns: minmax(0, 1fr); }
+  .scenario-row { grid-template-columns: 10ch minmax(0, 1fr); }
+  .scenario-row .scenario-diff, .scenario-row .scenario-exit { grid-column: 1 / -1; }
   .trace-row { grid-template-columns: 3ch 8ch minmax(8ch, 1fr); }
   .trace-row .trace-bytes { display: none; }
   .mutation-row { grid-template-columns: 5ch 9ch minmax(0, 1fr); }

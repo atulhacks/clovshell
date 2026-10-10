@@ -150,6 +150,41 @@ test('execution flow retains hot back edges beyond the trace cap', async ({ page
   expect(report.flow.edges.some((edge) => edge.hits === 499 && edge.lastStep > 400)).toBe(true);
 });
 
+test('path divergence lab replays scenarios and opens their individual traces', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'scenario worker browser regression runs once on desktop Chromium');
+  await openWorkbench(page);
+  await page.locator('#asm-editor-host textarea').fill([
+    'cmp rdi, 1', 'je one', 'xor edi, edi', 'jmp done',
+    'one:', 'mov edi, 1', 'done:', 'mov eax, 60', 'syscall',
+  ].join('\n'));
+  await page.locator('#scenario-args').fill('0, 1, 2');
+  await page.locator('#btn-explore').click();
+  await expect(page.locator('#scenario-results .scenario-row')).toHaveCount(3);
+  await expect(page.locator('#scenario-stats')).toContainText('3 / 3 runs');
+  const rows = page.locator('#scenario-results .scenario-row');
+  await expect(rows.nth(1)).toContainText('first difference #3');
+  await expect(rows.nth(1)).toContainText('exit(1)');
+  await rows.nth(1).click();
+  await expect(page.locator('#emu-msg')).toContainText('exit(1)');
+  await rows.first().click();
+  await expect(page.locator('#emu-msg')).toContainText('exit(0)');
+  await page.locator('#scenario-input').fill('41');
+  await expect(page.locator('#scenario-results .scenario-row')).toHaveCount(0);
+});
+
+test('input fixture supplies read bytes in a normal browser emulation', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'fixture browser regression runs once on desktop Chromium');
+  await openWorkbench(page);
+  await page.locator('#asm-editor-host textarea').fill([
+    'sub rsp, 16', 'xor edi, edi', 'mov rsi, rsp', 'mov edx, 1',
+    'xor eax, eax', 'syscall', 'movzx edi, byte ptr [rsp]', 'mov eax, 60', 'syscall',
+  ].join('\n'));
+  await page.locator('#scenario-input').fill('41');
+  await page.locator('#btn-run-emu').click();
+  await expect(page.locator('#emu-msg')).toContainText('exit(65)');
+  await expect(page.locator('#emu-log')).toContainText('input fixture');
+});
+
 test('shows decoder writes and exports the reconstructed runtime stage', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium', 'mutation atlas browser regression runs once on desktop Chromium');
   await openWorkbench(page);

@@ -12,6 +12,8 @@ describe('FlowCollector', () => {
     flow.record(4, 0x1001, 2, b, null, 0);
     const graph = flow.result();
     expect(graph.nodes).toHaveLength(2);
+    expect(graph.path).toEqual([0, 1, 0, 1]);
+    expect(graph.pathTruncated).toBe(false);
     expect(graph.nodes.map((node) => node.hits)).toEqual([2, 2]);
     expect(graph.nodes[1]).toMatchObject({ firstStep: 2, lastStep: 4 });
     expect(graph.edges).toEqual([
@@ -44,5 +46,12 @@ describe('FlowCollector', () => {
     expect(graph.truncated).toBe(true);
     expect(graph.nodes.map((node) => node.hits)).toEqual([2, 2]);
     expect(graph.edges).toEqual([{ fromId: 0, toId: 1, hits: 2, firstStep: 2, lastStep: 5 }]);
+  });
+
+  it('labels an instruction path that exceeds its capture limit', () => {
+    const flow = new FlowCollector();
+    for (let step = 1; step <= 8193; step++) flow.record(step, 0x1000, 1, Uint8Array.of(0x90), null, 0);
+    expect(flow.result().path).toHaveLength(8192);
+    expect(flow.result().pathTruncated).toBe(true);
   });
 });

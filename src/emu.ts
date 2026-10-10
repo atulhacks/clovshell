@@ -40,9 +40,10 @@ export async function preloadEmu(archId: string): Promise<void> {
 /** name of the register the entry argument lands in, for UI labels */
 export function entryArgReg(archId: string): string | null {
   if (archId === 'x86-64') return 'rdi';
+  if (archId === 'x86-32') return '[esp+4]';
   if (archId === 'arm' || archId === 'arm-thumb') return 'r0';
   if (archId === 'arm64') return 'x0';
-  return null; // x86-32: cdecl, args arrive on the stack
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +301,8 @@ interface SyscallCtx {
   syscalls: EmuSyscall[];
   mmapCursor: number;
   nextFd: number;
+  inputBytes: Uint8Array;
+  inputOffset: number;
   recordMapEvent(operation: EmuMapEvent['operation'], addr: number, size: number, permissions: number | null): void;
   stop(reason: string): void;
 }
@@ -310,6 +313,7 @@ const EFAULT = -14n;
 const MAX_MMAP_BYTES = 16 * 1024 * 1024;
 const MMAP_END = MMAP_BASE + 64 * 1024 * 1024;
 const MAX_IO_BYTES = 1024 * 1024;
+export const MAX_INPUT_BYTES = 4096;
 
 const SOCKETCALL_NAMES: Record<number, string> = {
   1: 'socket', 2: 'bind', 3: 'connect', 4: 'listen', 5: 'accept',
@@ -489,9 +493,27 @@ function emulateSyscall(ctx: SyscallCtx, name: string, args: bigint[]): bigint |
       return args[2] ?? 0n;
     case 'read':
     case 'recv':
-    case 'recvfrom':
-      ctx.syscalls.push({ call: `${name}(${args[0] ?? 0n}, ${hex(args[1] ?? 0n)}, ${args[2] ?? 0n})`, ret: '0' });
-      return 0n;
+    case 'recvfrom': {
+      const fd = args[0] ?? 0n;
+      const ptr = args[1] ?? 0n;
+      const requested = args[2] ?? 0n;
+      const call = `${name}(${fd}, ${hex(ptr)}, ${requested})`;
+      if (requested < 0n || requested > BigInt(MAX_IO_BYTES)) return syscallFailure(ctx, call, EINVAL, 'I/O limit');
+      // The fixture models stdin and socket reads; other file descriptors remain EOF.
+      const available = name === 'read' && fd !== 0n ? 0 : ctx.inputBytes.length - ctx.inputOffset;
+      const count = Math.min(Number(requested), available);
+      if (count > 0) {
+        if (ptr < 0n || ptr > BigInt(Number.MAX_SAFE_INTEGER)) return syscallFailure(ctx, call, EFAULT, 'EFAULT');
+        try {
+          ctx.e.mem_write(Number(ptr), ctx.inputBytes.subarray(ctx.inputOffset, ctx.inputOffset + count));
+        } catch {
+          return syscallFailure(ctx, call, EFAULT, 'EFAULT');
+        }
+        ctx.inputOffset += count;
+      }
+      ctx.syscalls.push({ call, ret: `${count}${count ? ' (input fixture)' : ''}` });
+      return BigInt(count);
+    }
     default: {
       return syscallFailure(ctx, `${name}(${args.map((a) => hex(a)).join(', ')})`, ENOSYS, 'not modeled');
     }
@@ -505,7 +527,9 @@ export async function runEmulation(
   archId: string,
   bytes: Uint8Array,
   entryArg?: bigint | null,
+  inputBytes: Uint8Array = new Uint8Array(),
 ): Promise<EmuResult> {
+  if (inputBytes.length > MAX_INPUT_BYTES) throw new Error(`input fixture exceeds ${MAX_INPUT_BYTES} bytes`);
   const which = emuEngineFor(archId);
   const uc = (await loadUnicorn(which)) as Record<string, number> & {
     Unicorn: new (arch: number, mode: number) => UnicornInstance;
@@ -576,8 +600,7 @@ export async function runEmulation(
   const spName = archId === 'x86-64' ? 'rsp' : archId === 'x86-32' ? 'esp' : 'sp';
   const pcName = archId === 'x86-64' ? 'rip' : archId === 'x86-32' ? 'eip' : 'pc';
   setReg(spName, BigInt(STACK_TOP));
-  // entry argument (SysV first-arg register) — functions like `sum_to_n` take
-  // their input here; running them with the default 0 usually just spins
+  // Entry argument for function-style shellcode; x86-32 uses cdecl stack layout.
   if (entryArg != null && glue.argReg) setReg(glue.argReg, entryArg);
   if (which === 'arm') setReg('lr', BigInt(SENTINEL));
   else if (archId === 'arm64') setReg('x30', BigInt(SENTINEL)); // x30 is LR
@@ -588,6 +611,10 @@ export async function runEmulation(
     e.mem_write(Number(newsp), width === 64
       ? Array.from({ length: 8 }, (_, i) => Number((BigInt(SENTINEL) >> BigInt(8 * i)) & 0xffn))
       : Array.from({ length: 4 }, (_, i) => Number((BigInt(SENTINEL) >> BigInt(8 * i)) & 0xffn)));
+    if (archId === 'x86-32' && entryArg != null) {
+      e.mem_write(Number(newsp) + 4, Array.from({ length: 4 }, (_, i) =>
+        Number((entryArg >> BigInt(8 * i)) & 0xffn)));
+    }
   }
 
   // initial register snapshot (for `changed` highlighting)
@@ -625,6 +652,8 @@ export async function runEmulation(
     syscalls,
     mmapCursor: MMAP_BASE,
     nextFd: 3,
+    inputBytes: Uint8Array.from(inputBytes),
+    inputOffset: 0,
     recordMapEvent(operation, addr, size, permissions) {
       if (mapEvents.length < MAP_EVENT_CAP) mapEvents.push({ step: steps, operation, addr, size, permissions });
       else mapEventsTruncated = true;

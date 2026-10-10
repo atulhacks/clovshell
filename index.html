@@ -200,6 +200,27 @@
           <div class="emu-regs" id="emu-regs"></div>
         </div>
       </div>
+      <div class="scenario-panel" id="scenario-panel">
+        <div class="mutation-head">
+          <div>
+            <h3 class="emu-sub">path divergence lab <span class="dim">— replay inputs and compare observed paths</span></h3>
+            <span class="stats" id="scenario-stats">up to 8 isolated runs · first 8192 instructions compared</span>
+          </div>
+          <div class="scenario-actions">
+            <button class="btn ghost hidden" id="btn-cancel-scenarios" type="button">cancel</button>
+            <button class="btn ghost" id="btn-explore" type="button">explore paths</button>
+          </div>
+        </div>
+        <div class="scenario-controls">
+          <label id="scenario-args-wrap" for="scenario-args">entry values <span class="dim">(decimal or 0x, separated by commas)</span>
+            <input id="scenario-args" type="text" spellcheck="false" autocomplete="off" value="0, 1, 2, 4, 8" aria-label="Scenario entry values" />
+          </label>
+          <label for="scenario-input">input fixture <span class="dim">(hex bytes for stdin / recv; also used by ▶ run)</span>
+            <input id="scenario-input" type="text" spellcheck="false" autocomplete="off" placeholder="e.g. 41 42 43" aria-label="Input fixture hex bytes" />
+          </label>
+        </div>
+        <div class="scenario-results" id="scenario-results" aria-label="Scenario results"></div>
+      </div>
       <div class="trace-panel hidden" id="trace-panel">
         <div class="trace-head">
           <div>

@@ -24,11 +24,12 @@ import {
 import { FORMATS } from './formats';
 import { highlightInstruction } from './highlight';
 import { createEditor, editorTemplate } from './editor';
-import { entryArgReg } from './emu';
+import { entryArgReg, MAX_INPUT_BYTES } from './emu';
 import type { EmuContextStep, EmuMutation, EmuResult, EmuStage } from './emu';
 import { diffStagePages } from './stage-explorer';
 import { flowEdgeLabels, isFlowTransfer } from './flow';
 import type { FlowEdge, FlowNode } from './flow';
+import { compareScenario, flowKeys, parseScenarioArgs, SCENARIO_CAP } from './scenarios';
 import { xorEncode } from './encoder';
 import { gadgetRows } from './gadgets';
 import type { Gadget } from './gadgets';
@@ -131,6 +132,13 @@ const emuArgLabel = $('#emu-arg-label');
 const emuArgWrap = $('#emu-arg-wrap');
 const badCharsInput = $<HTMLInputElement>('#bad-chars');
 const badCharsMsg = $('#bad-chars-msg');
+const scenarioArgs = $<HTMLInputElement>('#scenario-args');
+const scenarioArgsWrap = $('#scenario-args-wrap');
+const scenarioInput = $<HTMLInputElement>('#scenario-input');
+const scenarioStats = $('#scenario-stats');
+const scenarioResults = $('#scenario-results');
+const btnExplore = $<HTMLButtonElement>('#btn-explore');
+const btnCancelScenarios = $<HTMLButtonElement>('#btn-cancel-scenarios');
 
 // bad-character table shared by the shellcode view, the listing and the stats
 let badChars = new Array<boolean>(256).fill(false);
@@ -152,7 +160,15 @@ function parseEntryArg(): { value: bigint } | { error: string } | null {
 function updateEmuArgUi(): void {
   const reg = entryArgReg(archId);
   emuArgWrap.classList.toggle('hidden', reg === null);
+  scenarioArgsWrap.classList.toggle('hidden', reg === null);
   if (reg) emuArgLabel.textContent = reg;
+}
+
+function parseInputFixture(): Uint8Array {
+  const parsed = parseHexInput(scenarioInput.value);
+  if (parsed.error) throw new Error(`input fixture: ${parsed.error}`);
+  if (parsed.bytes.length > MAX_INPUT_BYTES) throw new Error(`input fixture exceeds ${MAX_INPUT_BYTES} bytes`);
+  return parsed.bytes;
 }
 
 // editor lives inside the ASSEMBLY section
@@ -992,6 +1008,8 @@ traceDownload.addEventListener('click', () => {
     finalCode: activeTrace.finalCode ? toHex(activeTrace.finalCode) : null,
     flow: {
       truncated: activeTrace.flow.truncated,
+      pathTruncated: activeTrace.flow.pathTruncated,
+      path: activeTrace.flow.path,
       nodes: activeTrace.flow.nodes.map((node) => ({
         id: node.id, address: formatAddress(node.addr), size: node.size,
         bytes: toHex(node.bytes), mode: node.mode, stageId: node.stageId,
@@ -1105,7 +1123,7 @@ function renderEmu(result: EmuResult | null): void {
 
 let emuBusy = false;
 
-function runEmulationInWorker(arch: string, bytes: Uint8Array, entryArg: bigint | null): Promise<EmuResult> {
+function runEmulationInWorker(arch: string, bytes: Uint8Array, entryArg: bigint | null, inputBytes: Uint8Array): Promise<EmuResult> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./emu-worker.ts', import.meta.url), { type: 'module' });
     const timer = setTimeout(() => {
@@ -1126,12 +1144,14 @@ function runEmulationInWorker(arch: string, bytes: Uint8Array, entryArg: bigint 
       reject(new Error(event.message || 'emulation worker failed'));
     };
     const copy = bytes.slice();
-    worker.postMessage({ archId: arch, bytes: copy, entryArg }, [copy.buffer]);
+    const input = inputBytes.slice();
+    worker.postMessage({ archId: arch, bytes: copy, entryArg, inputBytes: input }, [copy.buffer, input.buffer]);
   });
 }
 
 async function runEmu(): Promise<void> {
   if (emuBusy) return;
+  clearScenarioResults();
   const src = editor.getValue().trim();
   const runArch = archId;
   if (!src) {
@@ -1144,6 +1164,7 @@ async function runEmu(): Promise<void> {
   }
   emuBusy = true;
   btnRunEmu.disabled = true;
+  btnExplore.disabled = true;
   btnRunEmu.textContent = '… running';
   setMsg(emuMsg, 'assembling…', '');
   try {
@@ -1162,8 +1183,9 @@ async function runEmu(): Promise<void> {
       setMsg(emuMsg, `✗ ${arg.error}`, 'err');
       return;
     }
+    const inputBytes = parseInputFixture();
     setMsg(emuMsg, 'loading unicorn engine (first run downloads ~1 MB)…', '');
-    const result = await runEmulationInWorker(runArch, res.bytes, arg ? arg.value : null);
+    const result = await runEmulationInWorker(runArch, res.bytes, arg ? arg.value : null, inputBytes);
     if (archId === runArch && editor.getValue().trim() === src) {
       setChip(chipUnicorn, 'ok');
       renderEmu(result);
@@ -1175,12 +1197,152 @@ async function runEmu(): Promise<void> {
   } finally {
     emuBusy = false;
     btnRunEmu.disabled = false;
+    btnExplore.disabled = false;
     btnRunEmu.textContent = '▶ run';
   }
 }
 
 btnRunEmu.addEventListener('click', () => void runEmu());
+
+let scenarioAbort: (() => void) | null = null;
+let scenarioGeneration = 0;
+let scenarioRows: HTMLButtonElement[] = [];
+
+function clearScenarioResults(): void {
+  scenarioGeneration++;
+  scenarioAbort?.();
+  scenarioRows = [];
+  scenarioResults.replaceChildren();
+  scenarioStats.textContent = `up to ${SCENARIO_CAP} isolated runs · first 8192 instructions compared`;
+}
+
+async function explorePaths(): Promise<void> {
+  if (emuBusy) return;
+  const src = editor.getValue().trim();
+  const runArch = archId;
+  if (!src || src.length > MAX_ASM_CHARS) {
+    scenarioStats.textContent = !src ? 'enter assembly source first' : 'assembly source exceeds the limit';
+    return;
+  }
+  let args: bigint[];
+  let inputBytes: Uint8Array;
+  try {
+    args = parseScenarioArgs(scenarioArgs.value, runArch);
+    inputBytes = parseInputFixture();
+  } catch (error) {
+    scenarioStats.textContent = error instanceof Error ? error.message : String(error);
+    return;
+  }
+  clearScenarioResults();
+  const generation = scenarioGeneration;
+  emuBusy = true;
+  btnExplore.disabled = true;
+  btnRunEmu.disabled = true;
+  btnCancelScenarios.classList.remove('hidden');
+  scenarioStats.textContent = 'assembling…';
+  try {
+    const { result: assembled } = await assembleInWorker(runArch, src);
+    if (generation !== scenarioGeneration || runArch !== archId || editor.getValue().trim() !== src) return;
+    if (!assembled.ok || !assembled.bytes?.length) throw new Error(assembled.error || 'assembly produced no bytes');
+    const bytes = assembled.bytes;
+    const seen = new Set<string>();
+    let baseline: EmuResult | null = null;
+    let completed = 0;
+    let cancelled = false;
+    let coverageLimited = false;
+    let pathLimited = false;
+    scenarioStats.textContent = `0 / ${args.length} runs`;
+    await new Promise<void>((resolve, reject) => {
+      const worker = new Worker(new URL('./scenario-worker.ts', import.meta.url), { type: 'module' });
+      let finished = false;
+      const timer = setTimeout(() => finish(new Error('scenario exploration timed out after 120 seconds')), 120_000);
+      const finish = (error?: Error): void => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        worker.terminate();
+        scenarioAbort = null;
+        if (error) reject(error);
+        else resolve();
+      };
+      scenarioAbort = () => { cancelled = true; finish(); };
+      worker.onerror = (event) => finish(new Error(event.message || 'scenario worker failed'));
+      worker.onmessage = (event: MessageEvent<{ index?: number; result?: EmuResult; error?: string; done?: true }>) => {
+        if (generation !== scenarioGeneration) { finish(); return; }
+        const message = event.data;
+        if (message.done) { finish(); return; }
+        completed++;
+        const index = message.index ?? completed - 1;
+        const label = entryArgReg(runArch) ? `0x${args[index]!.toString(16)}` : 'fixture';
+        if (message.error || !message.result) {
+          scenarioResults.append(el('div', { class: 'scenario-error' }, `${label} · ${message.error ?? 'run failed'}`));
+        } else {
+          const result = message.result;
+          coverageLimited ||= result.flow.truncated;
+          pathLimited ||= result.flow.pathTruncated;
+          const reference = baseline ?? result;
+          const comparison = compareScenario(reference, result, seen);
+          for (const edge of flowKeys(result).edges) seen.add(edge);
+          if (!baseline) baseline = result;
+          const step = comparison.firstDifferentStep;
+          const baselineNode = step ? reference.flow.nodes[reference.flow.path[step - 1] ?? -1] : null;
+          const runNode = step ? result.flow.nodes[result.flow.path[step - 1] ?? -1] : null;
+          const divergence = step
+            ? `first difference #${step}: ${baselineNode ? formatAddress(baselineNode.addr) : 'end'} → ${runNode ? formatAddress(runNode.addr) : 'end'}`
+            : comparison.prefixLimited ? 'same captured prefix · path limit reached'
+              : reference === result ? 'baseline' : 'same observed path';
+          const row = el('button', { class: 'scenario-row', type: 'button',
+            'aria-label': `Scenario ${label}, ${comparison.newEdges} new edges, ${divergence}` },
+            el('span', { class: 'scenario-value' }, label),
+            el('span', {}, `+${comparison.newEdges} edges · ${comparison.totalEdges} total`),
+            el('span', { class: 'scenario-diff' }, divergence),
+            el('span', { class: 'scenario-exit' }, result.exit),
+          );
+          row.addEventListener('click', () => {
+            for (const other of scenarioRows) {
+              other.classList.remove('active');
+              other.removeAttribute('aria-current');
+            }
+            row.classList.add('active');
+            row.setAttribute('aria-current', 'true');
+            renderEmu(result);
+          });
+          scenarioRows.push(row);
+          scenarioResults.append(row);
+          if (scenarioRows.length === 1) row.click();
+        }
+        scenarioStats.textContent = `${completed} / ${args.length} runs · ${seen.size} distinct edges${coverageLimited ? ' · coverage capture limited' : ''}`;
+      };
+      const codeCopy = bytes.slice();
+      const inputCopy = inputBytes.slice();
+      worker.postMessage({ archId: runArch, bytes: codeCopy, args, inputBytes: inputCopy },
+        [codeCopy.buffer, inputCopy.buffer]);
+    });
+    if (generation === scenarioGeneration) {
+      scenarioStats.textContent = `${cancelled ? 'cancelled after ' : ''}${completed} / ${args.length} runs · ${seen.size} distinct edges${coverageLimited ? ' · coverage capture limited' : ''}${pathLimited ? ' · path prefix limited' : ''}`;
+      if (completed > 0) setChip(chipUnicorn, 'ok');
+    }
+  } catch (error) {
+    if (generation === scenarioGeneration) scenarioStats.textContent = `✗ ${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    emuBusy = false;
+    btnExplore.disabled = false;
+    btnRunEmu.disabled = false;
+    btnCancelScenarios.classList.add('hidden');
+  }
+}
+
+btnExplore.addEventListener('click', () => void explorePaths());
+btnCancelScenarios.addEventListener('click', () => {
+  scenarioAbort?.();
+});
+scenarioArgs.addEventListener('input', clearScenarioResults);
+scenarioInput.addEventListener('input', () => {
+  clearScenarioResults();
+  renderEmu(null);
+});
 $('#btn-clear-emu').addEventListener('click', () => {
+  clearScenarioResults();
   renderEmu(null);
   saveState();
 });
@@ -1579,6 +1741,7 @@ const autoDisassemble = debounce(() => {
 }, 350);
 
 editor.onChange(() => {
+  clearScenarioResults();
   cancelAssembly();
   lastAssembled = null;
   clearBytesFrom('assembler');
@@ -1638,6 +1801,7 @@ $('#btn-copy-shellcode').addEventListener('click', async () => {
 });
 
 archSelect.addEventListener('change', () => {
+  clearScenarioResults();
   cancelAssembly();
   lastAssembled = null;
   clearBytesFrom('assembler');
