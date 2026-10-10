@@ -60,8 +60,12 @@ describe('runEmulation', () => {
       expect(stage, `${arch}: mapped stage`).toBeDefined();
       expect(stage!.pageBase).toBe(0x30000000);
       expect(stage!.snapshot.slice(0, payload.length)).toEqual(payload);
+      expect(stage!.beforeSnapshot?.slice(0, payload.length)).toEqual(new Uint8Array(payload.length));
       expect(stage!.instructionBytes).toEqual(disassemble(arch, payload, 1).insns[0]?.bytes);
       expect(stage!.writerStep).not.toBeNull();
+      expect(stage!.writerContext.at(-1)?.step).toBe(stage!.writerStep);
+      expect(stage!.executionContext.some((step) => step.step === stage!.firstExecutionStep)).toBe(true);
+      expect(stage!.contextTruncated).toBe(false);
       expect(stage!.permissions! & 4).toBe(4);
       expect(result.mapEvents.map((event) => event.operation)).toEqual(['mmap', 'mprotect']);
       expect(result.stagesTruncated).toBe(false);
@@ -79,6 +83,39 @@ describe('runEmulation', () => {
     expect(stage.firstExecutionStep).toBeGreaterThan(400);
     expect(stage.instructionBytes).toEqual(payload.slice(0, 2));
     expect(stage.snapshot.slice(0, payload.length)).toEqual(payload);
+    expect(stage.executionContext[0]?.step).toBe(stage.firstExecutionStep - 6);
+    expect(stage.executionContext.some((step) => step.step === stage.firstExecutionStep + 1)).toBe(true);
+  });
+
+  it('keeps the exact writer and execution windows after the main trace cap', async () => {
+    const { source, payload } = mappedStageFixture('x86-64');
+    const delayed = ['mov ecx, 500', 'wait_loop:', 'dec ecx', 'jne wait_loop', source].join('\n');
+    const result = await runEmulation('x86-64', assemble('x86-64', delayed).bytes!);
+    const stage = result.stages.find((item) => item.origin === 'mapped')!;
+    expect(result.exit).toBe('exit(0)');
+    expect(stage.writerStep).toBeGreaterThan(400);
+    expect(stage.firstExecutionStep).toBeGreaterThan(stage.writerStep!);
+    expect(stage.writerContext.at(-1)?.step).toBe(stage.writerStep);
+    expect(stage.writerContext.at(-1)?.bytes.length).toBeGreaterThan(0);
+    expect(stage.writerContext.at(-1)?.registers).toHaveLength(result.registers.length);
+    expect(stage.executionContext.find((step) => step.step === stage.firstExecutionStep)?.bytes)
+      .toEqual(payload.slice(0, 2));
+    expect(stage.executionContext[0]?.step).toBe(stage.firstExecutionStep - 6);
+    expect(stage.executionContext.length).toBeGreaterThan(7);
+    expect(stage.beforeSnapshot?.slice(0, payload.length)).toEqual(new Uint8Array(payload.length));
+    expect(stage.contextTruncated).toBe(false);
+  });
+
+  it('zeros fresh mappings even after an earlier emulator instance used the same address', async () => {
+    const first = mappedStageFixture('x86-64');
+    await runEmulation('x86-64', assemble('x86-64', first.source).bytes!);
+    const second = [
+      'xor edi, edi', 'mov esi, 4096', 'mov edx, 3', 'mov r10d, 0x22',
+      'mov r8d, -1', 'xor r9d, r9d', 'mov eax, 9', 'syscall',
+      'movzx edi, byte ptr [rax]', 'mov eax, 60', 'syscall',
+    ].join('\n');
+    const result = await runEmulation('x86-64', assemble('x86-64', second).bytes!);
+    expect(result.exit).toBe('exit(0)');
   });
 
   it('promotes written stack bytes to a stage only when executed', async () => {

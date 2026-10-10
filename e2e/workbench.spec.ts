@@ -149,6 +149,11 @@ test('shows mapped-code provenance and downloads its first-execution snapshot', 
   await expect(page.locator('#stage-detail')).toContainText('mmap');
   await expect(page.locator('#stage-detail')).toContainText('mprotect');
   await expect(page.locator('#stage-detail')).toContainText('r-x');
+  await expect(page.locator('#stage-diff-stats')).toContainText('changed bytes');
+  await expect(page.locator('#stage-before-disasm')).toContainText('zero-filled page');
+  await expect(page.locator('#stage-after-disasm')).toContainText('xor edi, edi');
+  await expect(page.locator('#stage-writer-context .stage-context-row.key')).toContainText('rep movsb');
+  await expect(page.locator('#stage-execution-context .stage-context-row.key')).toContainText('xor edi, edi');
   const snapshotPromise = page.waitForEvent('download');
   await page.locator('#stage-snapshot-download').click();
   const snapshot = await snapshotPromise;
@@ -166,6 +171,45 @@ test('shows mapped-code provenance and downloads its first-execution snapshot', 
     writerStep: expect.any(Number),
   });
   expect(report.mapEvents.map((event) => event.operation)).toEqual(['mmap', 'mprotect']);
+});
+
+test('retains post-cap writer and execution context in the Stage Explorer', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name.startsWith('mobile-'), 'stage explorer evidence regression runs on desktop browsers');
+  await openWorkbench(page);
+  const source = [
+    'mov ecx, 500', 'wait_loop:', 'dec ecx', 'jne wait_loop',
+    'xor edi, edi', 'mov esi, 4096', 'mov edx, 3', 'mov r10d, 0x22',
+    'mov r8d, -1', 'xor r9d, r9d', 'mov eax, 9', 'syscall',
+    'mov rbx, rax', 'lea rsi, [rip + payload]', 'mov rdi, rbx', 'mov ecx, 9',
+    'rep movsb', 'mov rdi, rbx', 'mov esi, 4096', 'mov edx, 5',
+    'mov eax, 10', 'syscall', 'jmp rbx',
+    'payload:', 'xor edi, edi', 'mov eax, 60', 'syscall',
+  ].join('\n');
+  await page.locator('#asm-editor-host textarea').fill(source);
+  await page.locator('#btn-run-emu').click();
+  await expect(page.locator('#emu-msg')).toContainText('exit(0)');
+  await page.locator('#stage-list .stage-row').filter({ hasText: 'mapped' }).click();
+  await expect(page.locator('#stage-writer-context .stage-context-row.key')).toContainText('rep movsb');
+  await expect(page.locator('#stage-execution-context .stage-context-row.key')).toContainText('xor edi, edi');
+  await expect(page.locator('#stage-diff-stats')).toContainText('changed bytes');
+  await page.locator('#stage-writer-context .stage-context-row.key').click();
+  await expect(page.locator('#stage-context-detail')).toContainText('rep movsb');
+  await expect(page.locator('#stage-context-detail')).toContainText('rdi');
+  await page.locator('#stage-execution-context .stage-context-row.key').click();
+  await expect(page.locator('#stage-context-detail')).toContainText('xor edi, edi');
+  const download = page.waitForEvent('download');
+  await page.locator('#trace-download').click();
+  const report = JSON.parse(await readFile(await (await download).path(), 'utf8')) as {
+    stages: { origin: string; writerStep: number | null; firstExecutionStep: number;
+      beforeSnapshot: string | null; writerContext: { number: number }[];
+      executionContext: { number: number }[]; diff: { changedBytes: number } | null }[];
+  };
+  const mapped = report.stages.find((stage) => stage.origin === 'mapped')!;
+  expect(mapped.writerStep).toBeGreaterThan(400);
+  expect(mapped.writerContext.at(-1)?.number).toBe(mapped.writerStep);
+  expect(mapped.executionContext.some((step) => step.number === mapped.firstExecutionStep)).toBe(true);
+  expect(mapped.beforeSnapshot?.slice(0, 18)).toBe('000000000000000000');
+  expect(mapped.diff?.changedBytes).toBeGreaterThan(0);
 });
 
 test('reloads and runs offline after installation', async ({ page, context, browserName }) => {

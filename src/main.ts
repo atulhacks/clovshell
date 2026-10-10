@@ -25,7 +25,8 @@ import { FORMATS } from './formats';
 import { highlightInstruction } from './highlight';
 import { createEditor, editorTemplate } from './editor';
 import { entryArgReg } from './emu';
-import type { EmuMutation, EmuResult } from './emu';
+import type { EmuContextStep, EmuMutation, EmuResult, EmuStage } from './emu';
+import { diffStagePages } from './stage-explorer';
 import { xorEncode } from './encoder';
 import { gadgetRows } from './gadgets';
 import type { Gadget } from './gadgets';
@@ -107,6 +108,17 @@ const stageStats = $('#stage-stats');
 const stageList = $('#stage-list');
 const stageDetail = $('#stage-detail');
 const stageSnapshotDownload = $<HTMLButtonElement>('#stage-snapshot-download');
+const stageDiffStats = $('#stage-diff-stats');
+const stageDiffSpans = $('#stage-diff-spans');
+const stageBeforeLabel = $('#stage-before-label');
+const stageBeforeBytes = $('#stage-before-bytes');
+const stageBeforeDisasm = $('#stage-before-disasm');
+const stageAfterLabel = $('#stage-after-label');
+const stageAfterBytes = $('#stage-after-bytes');
+const stageAfterDisasm = $('#stage-after-disasm');
+const stageWriterContext = $('#stage-writer-context');
+const stageExecutionContext = $('#stage-execution-context');
+const stageContextDetail = $('#stage-context-detail');
 const btnRunEmu = $<HTMLButtonElement>('#btn-run-emu');
 const emuArgInput = $<HTMLInputElement>('#emu-arg');
 const emuArgLabel = $('#emu-arg-label');
@@ -581,6 +593,108 @@ function permissionLabel(permissions: number | null): string {
   return `${permissions & 1 ? 'r' : '-'}${permissions & 2 ? 'w' : '-'}${permissions & 4 ? 'x' : '-'}`;
 }
 
+function stageDisassembly(bytes: Uint8Array, address: number): string {
+  if (!bytes.length) return 'bytes unavailable';
+  if (bytes.every((byte) => byte === 0)) return 'zero-filled page';
+  const decoded = disassemble(traceArch, bytes, 7, address);
+  return decoded.insns.length
+    ? decoded.insns.map((insn) => `${formatAddress(insn.address)}  ${insn.mnemonic} ${insn.opStr}`.trim()).join('\n')
+    : '(undecoded)';
+}
+
+function showContextStep(step: EmuContextStep, context: EmuContextStep[], row: HTMLElement, jump: boolean): void {
+  stageWriterContext.querySelector('.active')?.classList.remove('active');
+  stageExecutionContext.querySelector('.active')?.classList.remove('active');
+  row.classList.add('active');
+  const decoded = step.bytes.length ? disassemble(traceArch, step.bytes, 1, step.addr).insns[0] : null;
+  const instruction = decoded ? `${decoded.mnemonic} ${decoded.opStr}`.trim() : '(undecoded)';
+  const prior = context.find((candidate) => candidate.step === step.step - 1);
+  stageContextDetail.replaceChildren(
+    el('div', { class: 'mutation-title' },
+      `instruction #${step.step} · ${formatAddress(step.addr)} · ${toSpacedHex(step.bytes)} · ${instruction}`),
+    el('div', { class: 'emu-regs stage-context-registers' },
+      ...activeTrace!.registers.map((reg, index) =>
+        el('div', { class: `emu-reg${prior && prior.registers[index] !== step.registers[index] ? ' changed' : ''}` },
+          el('span', { class: 'emu-reg-name' }, reg.name),
+          el('span', { class: 'emu-reg-val' }, step.registers[index] ?? '—')))),
+  );
+  if (jump && activeTrace && step.step <= activeTrace.trace.length) selectTraceStep(step.step - 1);
+}
+
+function renderContextRows(target: HTMLElement, context: EmuContextStep[], activeStep: number | null): void {
+  target.replaceChildren();
+  if (!context.length) {
+    target.append(el('div', { class: 'listing-empty' }, 'No context was retained.'));
+    return;
+  }
+  for (const step of context) {
+    const decoded = step.bytes.length ? disassemble(traceArch, step.bytes, 1, step.addr).insns[0] : null;
+    const instruction = decoded ? `${decoded.mnemonic} ${decoded.opStr}`.trim() : '(undecoded)';
+    const attrs = { class: `stage-context-row${step.step === activeStep ? ' key' : ''}` };
+    const content = [
+      el('span', { class: 'trace-num' }, `#${step.step}`),
+      el('span', { class: 'trace-address' }, formatAddress(step.addr)),
+      el('span', { class: 'trace-bytes' }, toSpacedHex(step.bytes) || '—'),
+      el('span', { class: 'trace-insn' }, instruction),
+    ];
+    const row = el('button', { ...attrs, type: 'button', 'data-step': String(step.step),
+      title: step.step <= (activeTrace?.trace.length ?? 0) ? 'Inspect here and in main trace' : 'Inspect post-cap context' }, ...content);
+    row.addEventListener('click', () => showContextStep(step, context, row, true));
+    target.append(row);
+  }
+}
+
+function renderStageExplorer(stage: EmuStage): void {
+  const before = stage.beforeSnapshot;
+  const after = stage.snapshot;
+  const diff = before && before.length === after.length ? diffStagePages(before, after) : null;
+  stageDiffStats.textContent = diff
+    ? `${diff.changedBytes} changed bytes · ${diff.totalSpans} span${diff.totalSpans === 1 ? '' : 's'}${stage.contextTruncated ? ' · context limited' : ''}`
+    : `baseline unavailable${stage.contextTruncated ? ' · context limited' : ''}`;
+  stageDiffSpans.replaceChildren();
+  if (diff) {
+    for (const span of diff.spans) {
+      const preview = Math.min(span.before.length, 24);
+      stageDiffSpans.append(el('div', { class: 'stage-diff-row' },
+        el('span', { class: 'trace-address' }, `${formatAddress(stage.pageBase + span.offset)} · ${span.before.length} B`),
+        el('code', {}, `${toSpacedHex(span.before.slice(0, preview))}${span.before.length > preview ? ' …' : ''}`),
+        el('span', { class: 'dim' }, '→'),
+        el('code', {}, `${toSpacedHex(span.after.slice(0, preview))}${span.after.length > preview ? ' …' : ''}`),
+      ));
+    }
+    if (diff.totalSpans > diff.spans.length) {
+      stageDiffSpans.append(el('div', { class: 'listing-empty' },
+        `${diff.totalSpans - diff.spans.length} more spans in the downloadable snapshots`));
+    }
+    if (!diff.totalSpans) stageDiffSpans.append(el('div', { class: 'listing-empty' }, 'No net byte change in this page.'));
+  } else stageDiffSpans.append(el('div', { class: 'listing-empty' }, 'No before-write page snapshot was available.'));
+
+  const offset = Math.max(0, Math.min(after.length - 1, stage.entryAddr - stage.pageBase));
+  const address = stage.pageBase + offset;
+  let pathEnd = stage.entryAddr;
+  for (const step of stage.executionContext) {
+    if (step.step < stage.firstExecutionStep) continue;
+    if (step.addr !== pathEnd || step.addr >= stage.pageBase + after.length) break;
+    pathEnd += step.bytes.length;
+    if (pathEnd - address >= 48) break;
+  }
+  const previewEnd = Math.min(after.length, Math.max(offset + 1, pathEnd - stage.pageBase), offset + 48);
+  const beforeView = before?.slice(offset, previewEnd) ?? new Uint8Array(0);
+  const afterView = after.slice(offset, previewEnd);
+  stageBeforeLabel.textContent = before ? formatAddress(address) : '(initial stage)';
+  stageAfterLabel.textContent = formatAddress(address);
+  stageBeforeBytes.textContent = before ? toSpacedHex(beforeView) : 'baseline unavailable';
+  stageAfterBytes.textContent = toSpacedHex(afterView) || 'snapshot unavailable';
+  stageBeforeDisasm.textContent = before ? stageDisassembly(beforeView, address) : 'initial loaded image';
+  stageAfterDisasm.textContent = stageDisassembly(afterView, address);
+  renderContextRows(stageWriterContext, stage.writerContext, stage.writerStep);
+  renderContextRows(stageExecutionContext, stage.executionContext, stage.firstExecutionStep);
+  const selected = stageExecutionContext.querySelector<HTMLElement>(`[data-step="${stage.firstExecutionStep}"]`);
+  if (selected) showContextStep(stage.executionContext.find((step) => step.step === stage.firstExecutionStep)!,
+    stage.executionContext, selected, false);
+  else stageContextDetail.replaceChildren();
+}
+
 function selectStage(index: number, focus = false): void {
   if (!activeTrace || index < 0 || index >= activeTrace.stages.length) return;
   stageRows[selectedStage]?.classList.remove('active');
@@ -624,12 +738,22 @@ function selectStage(index: number, focus = false): void {
     el('div', { class: 'mutation-jumps' }, ...actions),
   );
   stageSnapshotDownload.disabled = stage.snapshot.length === 0;
+  renderStageExplorer(stage);
 }
 
 function renderStages(result: EmuResult | null): void {
   stageRows = [];
   stageList.replaceChildren();
   stageDetail.replaceChildren();
+  stageDiffStats.textContent = '';
+  stageDiffSpans.replaceChildren();
+  stageBeforeBytes.textContent = '';
+  stageBeforeDisasm.textContent = '';
+  stageAfterBytes.textContent = '';
+  stageAfterDisasm.textContent = '';
+  stageWriterContext.replaceChildren();
+  stageExecutionContext.replaceChildren();
+  stageContextDetail.replaceChildren();
   stageSnapshotDownload.disabled = true;
   if (!result) {
     stageStats.textContent = '';
@@ -788,9 +912,23 @@ traceDownload.addEventListener('click', () => {
       firstExecutionStep: stage.firstExecutionStep,
       instructionBytes: toHex(stage.instructionBytes),
       snapshot: toHex(stage.snapshot),
+      beforeSnapshot: stage.beforeSnapshot ? toHex(stage.beforeSnapshot) : null,
+      diff: stage.beforeSnapshot && stage.beforeSnapshot.length === stage.snapshot.length
+        ? (() => { const diff = diffStagePages(stage.beforeSnapshot!, stage.snapshot, 0); return {
+          changedBytes: diff.changedBytes, totalSpans: diff.totalSpans,
+        }; })() : null,
       permissions: permissionLabel(stage.permissions),
       writerStep: stage.writerStep,
       writerAddress: stage.writerAddr == null ? null : formatAddress(stage.writerAddr),
+      contextTruncated: stage.contextTruncated,
+      writerContext: stage.writerContext.map((step) => ({
+        number: step.step, address: formatAddress(step.addr), bytes: toHex(step.bytes),
+        registersBefore: Object.fromEntries(names.map((name, i) => [name, step.registers[i]])),
+      })),
+      executionContext: stage.executionContext.map((step) => ({
+        number: step.step, address: formatAddress(step.addr), bytes: toHex(step.bytes),
+        registersBefore: Object.fromEntries(names.map((name, i) => [name, step.registers[i]])),
+      })),
     })),
     trace: activeTrace.trace.map((step, index) => ({
       number: index + 1,

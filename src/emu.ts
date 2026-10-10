@@ -69,6 +69,15 @@ export interface EmuStep {
   registers: string[];
 }
 
+export interface EmuContextStep {
+  /** one-based instruction number, including steps beyond the main trace cap */
+  step: number;
+  addr: number;
+  bytes: Uint8Array;
+  /** register values before the instruction */
+  registers: string[];
+}
+
 export interface EmuMutation {
   /** one-based instruction number responsible for this write */
   writerStep: number;
@@ -99,9 +108,14 @@ export interface EmuStage {
   instructionBytes: Uint8Array;
   /** page contents at first execution, not at emulation exit */
   snapshot: Uint8Array;
+  /** same-page contents before the writes that produced this stage */
+  beforeSnapshot: Uint8Array | null;
   permissions: number | null;
   writerStep: number | null;
   writerAddr: number | null;
+  writerContext: EmuContextStep[];
+  executionContext: EmuContextStep[];
+  contextTruncated: boolean;
 }
 
 export interface EmuResult {
@@ -146,13 +160,26 @@ const STAGE_CAP = 64;
 const TRACKED_PAGE_CAP = 64;
 const PENDING_WRITE_CAP = 2048;
 const MAP_EVENT_CAP = 256;
+const CONTEXT_RADIUS = 6;
+const WRITER_CONTEXTS_PER_PAGE = 64;
+const ZERO_BLOCK = new Uint8Array(64 * 1024);
+
+// Unicorn.js may reuse nonzero WASM backing pages across engine instances.
+function zeroMappedMemory(e: UnicornInstance, base: number, size: number): void {
+  for (let offset = 0; offset < size; offset += ZERO_BLOCK.length) {
+    e.mem_write(base + offset, ZERO_BLOCK.subarray(0, Math.min(ZERO_BLOCK.length, size - offset)));
+  }
+}
 
 interface DirtyPage {
+  beforeSnapshot: Uint8Array | null;
   changed: Uint8Array;
   count: number;
   writerStep: Int32Array;
   writerAddr: Uint32Array;
   writerStageId: Int32Array;
+  writerContexts: Map<number, EmuContextStep[]>;
+  contextTruncated: boolean;
 }
 // NOTE: emu_start's timeout parameter must stay 0 — unicorn implements timeouts
 // with a QEMU timer thread, which aborts under WASM ("qemu_thread_create: Not
@@ -401,8 +428,11 @@ function emulateSyscall(ctx: SyscallCtx, name: string, args: bigint[]): bigint |
         return syscallFailure(ctx, `${name}(${hex(mapArgs[0] ?? 0n)}, ${requested})`, EINVAL, 'mmap limit');
       }
       try {
-        ctx.e.mem_map(page, span, Number((mapArgs[2] ?? 7n) & 7n));
+        ctx.e.mem_map(page, span, 7);
+        zeroMappedMemory(ctx.e, page, span);
+        ctx.e.mem_protect(page, span, Number((mapArgs[2] ?? 7n) & 7n));
       } catch {
+        try { ctx.e.mem_unmap(page, span); } catch { /* Mapping may not have succeeded. */ }
         return syscallFailure(ctx, `${name}(${hex(mapArgs[0] ?? 0n)}, ${requested})`, EINVAL, 'mapping failed');
       }
       ctx.mmapCursor += span;
@@ -490,11 +520,15 @@ export async function runEmulation(
   const stages: EmuStage[] = [];
   const mapEvents: EmuMapEvent[] = [];
   const pendingWrites: {
-    addr: number; before: Uint8Array; writerStep: number; writerAddr: number; writerStageId: number;
+    addr: number; before: Uint8Array; beforeSnapshot: Uint8Array | null;
+    writerStep: number; writerAddr: number; writerStageId: number; writerContext: EmuContextStep[];
   }[] = [];
+  const pendingPageBaselines = new Map<number, Uint8Array | null>();
   const dirtyPages = new Map<number, DirtyPage>();
   const pageStageIds = new Map<number, number>();
   const pendingExecutionMutations = new Map<number, Set<EmuMutation>>();
+  const recentSteps: EmuContextStep[] = [];
+  const openContextStages: { stage: EmuStage; remaining: number }[] = [];
   let steps = 0;
   let currentInstructionAddr = CODE;
   let activeStageId = -1;
@@ -507,8 +541,11 @@ export async function runEmulation(
 
   // --- memory
   e.mem_map(CODE_MAP, CODE_SPAN, uc.PROT_ALL!);
+  zeroMappedMemory(e, CODE_MAP, CODE_SPAN);
   e.mem_map(STACK, 0x100000, uc.PROT_ALL!);
+  zeroMappedMemory(e, STACK, 0x100000);
   e.mem_map(SENTINEL, 0x1000, uc.PROT_ALL!);
+  zeroMappedMemory(e, SENTINEL, 0x1000);
   e.mem_write(CODE, bytes);
   // landing pad for shellcodes that `ret`/return: ud2 = clean "invalid
   // instruction" stop instead of executing whatever zeros are there
@@ -610,11 +647,14 @@ export async function runEmulation(
         return;
       }
       dirty = {
+        beforeSnapshot: write.beforeSnapshot,
         changed: new Uint8Array(PAGE_SIZE),
         count: 0,
         writerStep: new Int32Array(PAGE_SIZE),
         writerAddr: new Uint32Array(PAGE_SIZE),
         writerStageId: new Int32Array(PAGE_SIZE),
+        writerContexts: new Map(),
+        contextTruncated: false,
       };
       dirtyPages.set(page, dirty);
     }
@@ -624,6 +664,13 @@ export async function runEmulation(
     dirty.writerStep[offset] = write.writerStep;
     dirty.writerAddr[offset] = write.writerAddr;
     dirty.writerStageId[offset] = write.writerStageId;
+    if (!dirty.writerContexts.has(write.writerStep)) {
+      if (dirty.writerContexts.size >= WRITER_CONTEXTS_PER_PAGE) {
+        dirty.writerContexts.delete(dirty.writerContexts.keys().next().value!);
+        dirty.contextTruncated = true;
+      }
+      dirty.writerContexts.set(write.writerStep, write.writerContext);
+    }
   };
 
   const addPendingMutation = (mutation: EmuMutation): void => {
@@ -684,6 +731,7 @@ export async function runEmulation(
       }
     }
     pendingWrites.length = 0;
+    pendingPageBaselines.clear();
   };
 
   const captureStage = (addr: number, instructionBytes: Uint8Array, page: number, dirtyOffset: number): void => {
@@ -695,6 +743,7 @@ export async function runEmulation(
     const writerStep = dirtyOffset >= 0 ? dirty!.writerStep[dirtyOffset]! : null;
     const writerAddr = dirtyOffset >= 0 ? dirty!.writerAddr[dirtyOffset]! : null;
     const writerStageId = dirtyOffset >= 0 ? dirty!.writerStageId[dirtyOffset]! : -1;
+    const writerContext = dirtyOffset >= 0 ? dirty!.writerContexts.get(writerStep!) ?? [] : [];
     let snapshot = new Uint8Array(0);
     try {
       snapshot = Uint8Array.from(e.mem_read(page, PAGE_SIZE));
@@ -713,7 +762,7 @@ export async function runEmulation(
       : location >= STACK && location < STACK + 0x100000 ? 'stack'
       : location >= MMAP_BASE && location < ctx.mmapCursor ? 'mapped' : 'other';
     const id = stages.length;
-    stages.push({
+    const stage: EmuStage = {
       id,
       fromStageId: writerStageId >= 0 ? writerStageId : activeStageId >= 0 ? activeStageId : null,
       origin,
@@ -722,10 +771,17 @@ export async function runEmulation(
       firstExecutionStep: steps,
       instructionBytes: Uint8Array.from(instructionBytes),
       snapshot,
+      beforeSnapshot: dirty?.beforeSnapshot ?? null,
       permissions,
       writerStep,
       writerAddr,
-    });
+      writerContext: [...writerContext],
+      executionContext: recentSteps.slice(-CONTEXT_RADIUS - 1),
+      contextTruncated: dirty?.contextTruncated ?? false,
+    };
+    if (writerStep != null && writerContext.length === 0) stage.contextTruncated = true;
+    stages.push(stage);
+    openContextStages.push({ stage, remaining: CONTEXT_RADIUS });
     pageStageIds.set(page, id);
     activeStageId = id;
     dirtyPages.delete(page);
@@ -765,14 +821,23 @@ export async function runEmulation(
     const firstPage = pageBaseOf(a);
     const lastPage = pageBaseOf(a + Math.max(size - 1, 0));
     let instructionBytes = new Uint8Array(0);
-    if (trace.length < TRACE_CAP || !pageStageIds.has(firstPage)
-        || dirtyPages.has(firstPage) || dirtyPages.has(lastPage)
-        || pendingExecutionMutations.has(firstPage) || pendingExecutionMutations.has(lastPage)) {
-      try {
-        instructionBytes = Uint8Array.from(e.mem_read(a, size));
-      } catch {
-        // A fetch fault is reported by the invalid-memory hook.
-      }
+    try {
+      instructionBytes = Uint8Array.from(e.mem_read(a, size));
+    } catch {
+      // A fetch fault is reported by the invalid-memory hook.
+    }
+    const contextStep: EmuContextStep = {
+      step: steps,
+      addr: a,
+      bytes: instructionBytes,
+      registers: glue.regOrder.map((name) => hex(getReg(name))),
+    };
+    recentSteps.push(contextStep);
+    if (recentSteps.length > CONTEXT_RADIUS + 1) recentSteps.shift();
+    for (let index = openContextStages.length - 1; index >= 0; index--) {
+      const window = openContextStages[index]!;
+      window.stage.executionContext.push(contextStep);
+      if (--window.remaining === 0) openContextStages.splice(index, 1);
     }
     const pending = new Set([
       ...(pendingExecutionMutations.get(firstPage) ?? []),
@@ -833,7 +898,7 @@ export async function runEmulation(
         addr: a,
         size,
         bytes: instructionBytes,
-        registers: glue.regOrder.map((name) => hex(getReg(name))),
+        registers: contextStep.registers!,
       });
     } else traceTruncated = true;
     if (steps >= STEP_LIMIT) {
@@ -858,18 +923,28 @@ export async function runEmulation(
         continue;
       }
       const span = Math.min(end - start, PAGE_SIZE - (start - pageBaseOf(start)));
+      const page = pageBaseOf(start);
       if (pendingWrites.length >= PENDING_WRITE_CAP) {
         stagesTruncated = true;
         if (start < CODE + bytes.length && start + span > CODE) mutationsTruncated = true;
         break;
       }
       try {
+        if (!dirtyPages.has(page) && !pendingPageBaselines.has(page)) {
+          try {
+            pendingPageBaselines.set(page, Uint8Array.from(e.mem_read(page, PAGE_SIZE)));
+          } catch {
+            pendingPageBaselines.set(page, null);
+          }
+        }
         pendingWrites.push({
           addr: start,
           before: Uint8Array.from(e.mem_read(start, span)),
+          beforeSnapshot: dirtyPages.get(page)?.beforeSnapshot ?? pendingPageBaselines.get(page) ?? null,
           writerStep: steps,
           writerAddr: currentInstructionAddr,
           writerStageId: activeStageId,
+          writerContext: recentSteps.slice(-CONTEXT_RADIUS - 1),
         });
       } catch {
         // An invalid write is reported separately by HOOK_MEM_INVALID.

@@ -63,6 +63,12 @@ and Capstone WASM files into `public/wasm/` through `postinstall`.
   or when those bytes are overwritten later. Download individual stage snapshots or the full JSON
   evidence. Capture is bounded to 64 stage snapshots, 64 pending dirty pages, and 256 observed bytes
   per individual write; a limited capture is labeled in the result.
+- Use the **Stage Explorer** to compare each executed page with its before-write snapshot, inspect
+  changed byte spans and side-by-side disassembly, and inspect bounded writer/execution windows with
+  per-step registers (six instructions on either side of a transition). These windows retain evidence
+  beyond the main 400-step trace; the JSON export includes
+  the snapshots, diff counts, and transition context. Fresh mappings and the initial stack/code
+  slack are explicitly zeroed so successive emulation runs cannot inherit stale WASM memory.
 - Set an initial first-argument register (`rdi`, `r0`, or `x0`) for function-style shellcode.
 - Keep the UI responsive with worker-based emulation, a 30-second outer timeout, and a
   100,000-instruction limit.
@@ -131,7 +137,7 @@ host, publish the contents of `dist/`.
 | Path | Purpose |
 | --- | --- |
 | `src/engines.ts`, `src/directives.ts` | WASM assembly/disassembly and source preprocessing |
-| `src/emu.ts`, `src/emu-worker.ts` | Emulation, syscall models, and execution capture |
+| `src/emu.ts`, `src/emu-worker.ts`, `src/stage-explorer.ts` | Emulation, execution capture, and stage comparison |
 | `src/encoder.ts`, `src/gadgets.ts`, `src/gadget-worker.ts` | XOR wrappers and bounded gadget scans |
 | `src/syscalls*.ts`, `src/presets.ts` | Syscall reference, scaffolds, and examples |
 | `src/main.ts`, `src/editor.ts`, `src/ui.ts` | Workbench interface and state |

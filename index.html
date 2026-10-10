@@ -243,6 +243,36 @@
             <div class="mutation-list" id="stage-list" aria-label="Executed code stages"></div>
             <div class="mutation-detail" id="stage-detail"></div>
           </div>
+          <div class="stage-explorer">
+            <div class="mutation-head">
+              <h3 class="emu-sub">stage explorer <span class="dim">— before / after and transition context</span></h3>
+              <span class="stats" id="stage-diff-stats"></span>
+            </div>
+            <div class="stage-diff-spans" id="stage-diff-spans"></div>
+            <div class="stage-compare-grid">
+              <div class="stage-compare-side">
+                <h4 class="emu-sub">before writes <span class="dim" id="stage-before-label"></span></h4>
+                <pre id="stage-before-bytes"></pre>
+                <div class="stage-disasm" id="stage-before-disasm"></div>
+              </div>
+              <div class="stage-compare-side">
+                <h4 class="emu-sub">at first execution <span class="dim" id="stage-after-label"></span></h4>
+                <pre id="stage-after-bytes"></pre>
+                <div class="stage-disasm" id="stage-after-disasm"></div>
+              </div>
+            </div>
+            <div class="stage-context-grid">
+              <div>
+                <h4 class="emu-sub">writer context <span class="dim">— up to 6 preceding instructions</span></h4>
+                <div class="stage-context-list" id="stage-writer-context"></div>
+              </div>
+              <div>
+                <h4 class="emu-sub">execution context <span class="dim">— up to 6 before and after</span></h4>
+                <div class="stage-context-list" id="stage-execution-context"></div>
+              </div>
+            </div>
+            <div class="stage-context-detail" id="stage-context-detail"></div>
+          </div>
         </div>
       </div>
       <p class="msg" id="emu-msg" role="status"></p>
