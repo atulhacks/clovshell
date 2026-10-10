@@ -24,6 +24,7 @@ your source and shellcode are not sent to a backend.
 | x86-64 | 64-bit | `syscall` |
 | x86-32 | 32-bit | `int 0x80` |
 | ARM | A32 | `svc` |
+| ARM | Thumb / Thumb-2 | `svc` |
 | ARM64 | AArch64 | `svc` |
 
 ## Run locally
@@ -40,7 +41,7 @@ and Capstone WASM files into `public/wasm/` through `postinstall`.
 
 ### Assemble and inspect
 
-- Write x86-64, x86-32, ARM A32, or ARM64 assembly and see the emitted bytes and instruction listing.
+- Write x86-64, x86-32, ARM A32, ARM Thumb, or ARM64 assembly and see the emitted bytes and instruction listing.
 - Paste hex as contiguous bytes, spaced bytes, `\xNN`, or `0xNN`; drop a raw `.bin` file into the page.
   Assembly files (`.asm`/`.s`) can be dropped into the editor.
 - Highlight bad bytes such as `00 0a 0d`, count null bytes, and download the result as `.bin`.
@@ -53,6 +54,9 @@ and Capstone WASM files into `public/wasm/` through `postinstall`.
 - Step through the first **400 executed instructions**, including the bytes fetched from emulated
   memory (useful for self-modifying code) and registers captured before each instruction. Navigate
   with buttons or arrow keys, or save the trace as JSON.
+- Follow A32↔Thumb `bx`/`blx` interworking. Each fetched instruction and stage records its actual
+  execution mode so mixed-mode traces and stage disassembly stay accurate; the ARM register view
+  includes `cpsr`. Mixed-mode input can be loaded as raw bytes.
 - Inspect the **Code Mutation Atlas** for writes to the loaded code image: original bytes, pre/post
   write bytes, the writing instruction, and the first observed execution of changed bytes. Download
   the final code-image snapshot as `.bin` or the trace and mutation evidence as JSON. Image mutations
@@ -75,7 +79,7 @@ and Capstone WASM files into `public/wasm/` through `postinstall`.
 
 ### Transform and extract
 
-- Generate self-decoding XOR wrappers for all four targets. Auto-pick a key that avoids configured
+- Generate self-decoding XOR wrappers for all five targets. Auto-pick a key that avoids configured
   bad bytes in the **complete stub and payload**, then load the result into the editor and run it.
 - Find short ROP gadgets by scanning each byte offset, with a 400-result cap and text filtering.
 - Export Python, C, C#, Java, JavaScript, Rust, Ruby, PowerShell, NASM, Base64, escaped strings,
@@ -95,8 +99,8 @@ and Capstone WASM files into `public/wasm/` through `postinstall`.
 ## Scope and limits
 
 clovshell is a CPU-and-syscall workbench, **not a full Linux VM**. File and socket operations are
-simulated; unmodeled syscalls return `-ENOSYS`. It currently exposes ARM **A32**, not Thumb, and
-supports only the four targets in the table above.
+simulated; unmodeled syscalls return `-ENOSYS`. A source file is assembled in the selected entry
+mode; for A32/Thumb mixed-mode programs, import an already assembled binary or paste its bytes.
 
 The emulator stops on unmapped memory faults. Returning shellcode lands on a sentinel instead of
 continuing into unrelated memory. Its instruction trace is capped at 400 entries even when the

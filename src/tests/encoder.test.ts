@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { assemble, initEngines } from '../engines';
+import { runEmulation } from '../emu';
 import { xorEncode } from '../encoder';
 
 beforeAll(async () => {
@@ -37,6 +38,18 @@ describe('xorEncode', () => {
     expect(res.source).toContain('adr r0, shellcode');
     expect(res.source).toContain('bx r0');
     expect(assemble('arm', res.source).ok).toBe(true);
+  });
+
+  it('Thumb decoder restores the payload and executes it', async () => {
+    const payload = assemble('arm-thumb', 'movs r0, #0\nmovs r7, #1\nsvc #0').bytes!;
+    const encoded = xorEncode('arm-thumb', payload, 0x5a);
+    expect('error' in encoded).toBe(false);
+    if ('error' in encoded) return;
+    const assembled = assemble('arm-thumb', encoded.source);
+    expect(assembled.ok, assembled.error ?? '').toBe(true);
+    const result = await runEmulation('arm-thumb', assembled.bytes!);
+    expect(result.exit, result.error ?? '').toBe('exit(0)');
+    expect(result.mutations.length).toBeGreaterThan(0);
   });
 
   it('arm64 stub uses adr + br, assembles', () => {

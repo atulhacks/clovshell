@@ -21,7 +21,7 @@ function isTerminator(archId: string, insn: DisasmLine): boolean {
     if (m === 'jmp' || m === 'call') return !/^0x[0-9a-f]+$/.test(op);
     return false;
   }
-  if (archId === 'arm') {
+  if (archId === 'arm' || archId === 'arm-thumb') {
     if (['bx', 'blx', 'b', 'bl'].includes(m)) return true;
     if (m === 'pop') return /\bpc\b/.test(op);
     if (['ldr', 'mov', 'sub', 'add'].includes(m)) return /^pc\b/.test(op);
@@ -40,7 +40,7 @@ export function findGadgets(archId: string, bytes: Uint8Array): Gadget[] | { err
   if (bytes.length > MAX_INPUT) {
     return { error: `input too large for a gadget scan (${bytes.length} bytes > ${MAX_INPUT})` };
   }
-  if (!['x86-64', 'x86-32', 'arm', 'arm64'].includes(archId)) {
+  if (!['x86-64', 'x86-32', 'arm', 'arm-thumb', 'arm64'].includes(archId)) {
     return { error: `gadget scanning is not supported for "${archId}"` };
   }
 
@@ -48,6 +48,8 @@ export function findGadgets(archId: string, bytes: Uint8Array): Gadget[] | { err
   const gadgets: Gadget[] = [];
 
   for (let start = 0; start < bytes.length && gadgets.length < MAX_GADGETS; start++) {
+    if (archId === 'arm-thumb' && start % 2 !== 0) continue;
+    if ((archId === 'arm' || archId === 'arm64') && start % 4 !== 0) continue;
     // Decode only enough bytes for eight instructions; never copy/disassemble
     // the entire remaining input at each offset.
     const maxBytes = archId.startsWith('x86') ? MAX_GADGET_INSNS * 15 : MAX_GADGET_INSNS * 4;

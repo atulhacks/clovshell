@@ -51,6 +51,16 @@ describe('findGadgets', () => {
     if (Array.isArray(result)) expect(result.map((g) => g.text)).toContain('pop {r0, pc}');
   });
 
+  it('finds Thumb halfword-aligned return gadgets', () => {
+    const bytes = assemble('arm-thumb', 'movs r0, #1\npop {r0, pc}\nbx lr').bytes!;
+    const result = findGadgets('arm-thumb', bytes);
+    expect(Array.isArray(result)).toBe(true);
+    if (Array.isArray(result)) {
+      expect(result.some((g) => g.address === 2 && g.text === 'pop {r0, pc}')).toBe(true);
+      expect(result.some((g) => g.address % 2 !== 0)).toBe(false);
+    }
+  });
+
   it('deduplicates identical instruction sequences', () => {
     // two separate `ret` bytes at different offsets — one gadget text
     const bytes = Uint8Array.from([0xc3, 0x90, 0x90, 0xc3]);

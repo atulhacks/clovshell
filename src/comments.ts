@@ -20,12 +20,12 @@ export function commentStartAt(line: string, i: number, arch: ArchDef): boolean 
   const c = line[i]!;
   if (c === ';') return true;
   if (c === '#') {
-    if (arch.id === 'arm' || arch.id === 'arm64') {
+    if (arch.id === 'arm' || arch.id === 'arm-thumb' || arch.id === 'arm64') {
       return !/^#\s*(0[xX][0-9a-fA-F]+|-?\d)/.test(line.slice(i));
     }
     return true;
   }
-  if (c === '@' && arch.id === 'arm') return true;
+  if (c === '@' && (arch.id === 'arm' || arch.id === 'arm-thumb')) return true;
   return false;
 }
 

@@ -28,7 +28,7 @@ function loadUnicorn(which: Loaded): Promise<unknown> {
 }
 
 export function emuEngineFor(archId: string): Loaded {
-  return archId === 'arm' ? 'arm' : archId === 'arm64' ? 'aarch64' : 'x86';
+  return archId === 'arm' || archId === 'arm-thumb' ? 'arm' : archId === 'arm64' ? 'aarch64' : 'x86';
 }
 
 export async function preloadEmu(archId: string): Promise<void> {
@@ -38,7 +38,7 @@ export async function preloadEmu(archId: string): Promise<void> {
 /** name of the register the entry argument lands in, for UI labels */
 export function entryArgReg(archId: string): string | null {
   if (archId === 'x86-64') return 'rdi';
-  if (archId === 'arm') return 'r0';
+  if (archId === 'arm' || archId === 'arm-thumb') return 'r0';
   if (archId === 'arm64') return 'x0';
   return null; // x86-32: cdecl, args arrive on the stack
 }
@@ -67,6 +67,8 @@ export interface EmuStep {
   bytes: Uint8Array;
   /** register values before this instruction, ordered like EmuResult.registers */
   registers: string[];
+  /** instruction-set state at fetch time, independent of the selected entry mode */
+  mode?: 'arm' | 'thumb';
 }
 
 export interface EmuContextStep {
@@ -76,6 +78,7 @@ export interface EmuContextStep {
   bytes: Uint8Array;
   /** register values before the instruction */
   registers: string[];
+  mode?: 'arm' | 'thumb';
 }
 
 export interface EmuMutation {
@@ -104,6 +107,7 @@ export interface EmuStage {
   origin: 'image' | 'code slack' | 'stack' | 'mapped' | 'other';
   pageBase: number;
   entryAddr: number;
+  mode?: 'arm' | 'thumb';
   firstExecutionStep: number;
   instructionBytes: Uint8Array;
   /** page contents at first execution, not at emulation exit */
@@ -240,15 +244,16 @@ function glueFor(archId: string, uc: Record<string, number>): ArchGlue {
       width: 32,
     };
   }
-  if (archId === 'arm') {
+  if (archId === 'arm' || archId === 'arm-thumb') {
     const r: Record<string, number> = {};
     for (let i = 0; i <= 12; i++) r['r' + i] = uc['ARM_REG_R' + i]!;
     r.sp = uc.ARM_REG_SP!;
     r.lr = uc.ARM_REG_LR!;
     r.pc = uc.ARM_REG_PC!;
+    r.cpsr = uc.ARM_REG_CPSR!;
     return {
       regs: r,
-      regOrder: [...Array.from({ length: 13 }, (_, i) => 'r' + i), 'sp', 'lr', 'pc'],
+      regOrder: [...Array.from({ length: 13 }, (_, i) => 'r' + i), 'sp', 'lr', 'pc', 'cpsr'],
       syscallNumReg: 'r7',
       returnReg: 'r0',
       argRegs: ['r0', 'r1', 'r2', 'r3', 'r4', 'r5'],
@@ -274,7 +279,7 @@ function glueFor(archId: string, uc: Record<string, number>): ArchGlue {
 function syscallTable(archId: string): { num: number; name: string; args?: string }[] {
   if (archId === 'x86-64') return x8664;
   if (archId === 'x86-32') return x8632;
-  if (archId === 'arm') return armTable;
+  if (archId === 'arm' || archId === 'arm-thumb') return armTable;
   return arm64Table;
 }
 
@@ -506,6 +511,7 @@ export async function runEmulation(
   const mode =
     archId === 'x86-64' ? uc.MODE_64! : archId === 'x86-32' ? uc.MODE_32!
     : archId === 'arm' ? uc.MODE_ARM!
+    : archId === 'arm-thumb' ? uc.MODE_THUMB!
     : uc.MODE_LITTLE_ENDIAN!;
   const archConst = which === 'x86' ? uc.ARCH_X86! : which === 'arm' ? uc.ARCH_ARM! : uc.ARCH_ARM64!;
 
@@ -569,7 +575,7 @@ export async function runEmulation(
   // entry argument (SysV first-arg register) — functions like `sum_to_n` take
   // their input here; running them with the default 0 usually just spins
   if (entryArg != null && glue.argReg) setReg(glue.argReg, entryArg);
-  if (archId === 'arm') setReg('lr', BigInt(SENTINEL));
+  if (which === 'arm') setReg('lr', BigInt(SENTINEL));
   else if (archId === 'arm64') setReg('x30', BigInt(SENTINEL)); // x30 is LR
   else {
     // x86: push the sentinel so `ret` pops it
@@ -768,6 +774,7 @@ export async function runEmulation(
       origin,
       pageBase: page,
       entryAddr: addr,
+      mode: recentSteps.at(-1)?.mode,
       firstExecutionStep: steps,
       instructionBytes: Uint8Array.from(instructionBytes),
       snapshot,
@@ -802,7 +809,7 @@ export async function runEmulation(
     // x86-32 int 0x80 / arm svc / arm64 svc → interrupt hook
     e.hook_add(uc.HOOK_INTR!, (_h: unknown, intno: number) => {
       if (archId === 'x86-32' && intno !== 0x80) return;
-      if ((archId === 'arm' || archId === 'arm64') && intno !== 0 && intno !== 2) return;
+      if ((which === 'arm' || archId === 'arm64') && intno !== 0 && intno !== 2) return;
       handleSyscall();
     });
   }
@@ -831,6 +838,7 @@ export async function runEmulation(
       addr: a,
       bytes: instructionBytes,
       registers: glue.regOrder.map((name) => hex(getReg(name))),
+      mode: which === 'arm' ? (e.reg_read_i32(uc.ARM_REG_CPSR!) & 0x20 ? 'thumb' : 'arm') : undefined,
     };
     recentSteps.push(contextStep);
     if (recentSteps.length > CONTEXT_RADIUS + 1) recentSteps.shift();
@@ -899,6 +907,7 @@ export async function runEmulation(
         size,
         bytes: instructionBytes,
         registers: contextStep.registers!,
+        mode: contextStep.mode,
       });
     } else traceTruncated = true;
     if (steps >= STEP_LIMIT) {
@@ -969,7 +978,7 @@ export async function runEmulation(
   // --- run
   let error: string | undefined;
   try {
-    e.emu_start(CODE, CODE + bytes.length, 0, STEP_LIMIT + 1);
+    e.emu_start(archId === 'arm-thumb' ? CODE | 1 : CODE, CODE + bytes.length, 0, STEP_LIMIT + 1);
   } catch (err) {
     if (!fault && !stopped) {
       error = err instanceof Error ? err.message : String(err);

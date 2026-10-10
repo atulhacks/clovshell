@@ -17,6 +17,7 @@ const MAX_LEN = {
   'x86-64': 255, // length travels in cl
   'x86-32': 255,
   arm: 255, // imm8-rotated immediate
+  'arm-thumb': 255, // 8-bit loop count and rewind
   arm64: 4095, // sub imm12
 } as const;
 
@@ -88,6 +89,24 @@ decode_loop:
     ret
 getpc:
     call decode
+shellcode:
+${data}
+`;
+  } else if (archId === 'arm-thumb') {
+    body = `    adr r4, shellcode
+    movs r1, #${n}
+    movs r2, #${k}
+decode_loop:
+    ldrb r3, [r4]
+    eors r3, r2
+    strb r3, [r4]
+    adds r4, #1
+    subs r1, #1
+    bne decode_loop
+    subs r4, #${n}
+    adds r4, #1
+    bx r4
+    .byte 0xc0, 0x46
 shellcode:
 ${data}
 `;

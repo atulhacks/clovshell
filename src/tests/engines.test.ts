@@ -34,6 +34,13 @@ describe('assemble', () => {
     expect(hex(res.bytes!)).toBe('0400a0e3');
   });
 
+  it('Thumb assembles and disassembles 16-bit instructions', () => {
+    const res = assemble('arm-thumb', 'movs r0, #4\nbx lr');
+    expect(res.ok, res.error ?? '').toBe(true);
+    expect(hex(res.bytes!)).toBe('04207047');
+    expect(disassemble('arm-thumb', res.bytes!).insns.map((insn) => insn.mnemonic)).toEqual(['movs', 'bx']);
+  });
+
   it('comments never reach the assembler', () => {
     const a = assemble('x86-64', 'nop ; trailing comment (with parens — unicode ø)');
     expect(a.ok).toBe(true);
@@ -49,12 +56,13 @@ describe('assemble', () => {
     expect(res.bytes!.length).toBeGreaterThan(0);
   });
 
-  it('labels resolve on all four arches', () => {
+  it('labels resolve on all five targets', () => {
     const cases: Array<[string, string, string]> = [
       ['x86-64', 'jmp over\nnop\nover:\nret', 'e900'],
       ['x86-32', 'jmp over\nnop\nover:\nret', 'e900'],
       ['arm64', 'loop:\nsub x0, x0, #1\ncbnz x0, loop\nret', ''],
       ['arm', 'loop:\nsub r0, r0, #1\ncmp r0, #0\nbne loop\nbx lr', ''],
+      ['arm-thumb', 'loop:\nsubs r0, #1\nbne loop\nbx lr', ''],
     ];
     for (const [arch, src, _] of cases) {
       const res = assemble(arch, src);

@@ -84,4 +84,14 @@ mov x8, #94
 mov x0, #0
 svc 0`,
   },
+  {
+    id: 'exit-thumb',
+    label: 'exit(0)',
+    arch: 'arm-thumb',
+    note: '6 B',
+    src: `; exit(0) — ARM Thumb EABI
+movs r7, #1
+movs r0, #0
+svc #0`,
+  },
 ];

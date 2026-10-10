@@ -49,6 +49,48 @@ function mappedStageFixture(arch: string): { source: string; payload: Uint8Array
 }
 
 describe('runEmulation', () => {
+  it('executes Thumb EABI svc and records Thumb fetch mode', async () => {
+    const bytes = assemble('arm-thumb', 'movs r0, #0\nmovs r7, #1\nsvc #0').bytes!;
+    const result = await runEmulation('arm-thumb', bytes);
+    expect(result.exit, result.error ?? '').toBe('exit(0)');
+    expect(result.trace.map((step) => step.mode)).toEqual(['thumb', 'thumb', 'thumb']);
+    expect(result.stages[0]?.mode).toBe('thumb');
+  });
+
+  it('follows an A32 bx into Thumb and preserves instruction mode', async () => {
+    const arm = assemble('arm', 'adr r1, thumb_entry\nadd r1, r1, #1\nbx r1\nthumb_entry:').bytes!;
+    const thumb = assemble('arm-thumb', 'movs r0, #0\nmovs r7, #1\nsvc #0').bytes!;
+    const result = await runEmulation('arm', Uint8Array.from([...arm, ...thumb]));
+    expect(result.exit, result.error ?? '').toBe('exit(0)');
+    expect(result.trace.map((step) => step.mode)).toEqual(['arm', 'arm', 'arm', 'thumb', 'thumb', 'thumb']);
+  });
+
+  it('follows a Thumb bx into A32 and preserves instruction mode', async () => {
+    const thumb = assemble('arm-thumb', 'movw r1, #0x0010\nmovt r1, #1\nbx r1').bytes!;
+    const arm = assemble('arm', 'mov r0, #0\nmov r7, #1\nsvc #0').bytes!;
+    const bytes = new Uint8Array(16 + arm.length);
+    bytes.set(thumb);
+    bytes.set(arm, 16);
+    const result = await runEmulation('arm-thumb', bytes);
+    expect(result.exit, result.error ?? '').toBe('exit(0)');
+    expect(result.trace.map((step) => step.mode)).toEqual(['thumb', 'thumb', 'thumb', 'arm', 'arm', 'arm']);
+  });
+
+  it('tracks A32-to-Thumb calls and Thumb-to-A32 returns', async () => {
+    const arm = assemble('arm', [
+      'adr r1, thumb_entry', 'add r1, r1, #1', 'blx r1',
+      'mov r7, #1', 'svc 0', 'thumb_entry:',
+    ].join('\n')).bytes!;
+    const thumb = assemble('arm-thumb', 'movs r0, #0\nbx lr').bytes!;
+    const result = await runEmulation('arm', Uint8Array.from([...arm, ...thumb]));
+    expect(result.exit, result.error ?? '').toBe('exit(0)');
+    expect(result.trace.map((step) => step.mode)).toEqual([
+      'arm', 'arm', 'arm', 'thumb', 'thumb', 'arm', 'arm',
+    ]);
+    expect(Number(BigInt(result.trace[3]!.registers.at(-1)!) & 0x20n)).toBe(0x20);
+    expect(Number(BigInt(result.trace[5]!.registers.at(-1)!) & 0x20n)).toBe(0);
+  });
+
   it.each(['x86-64', 'x86-32', 'arm', 'arm64'])(
     '%s captures a mapped RW-to-RX payload at first execution', async (arch) => {
       const { source, payload } = mappedStageFixture(arch);
@@ -346,7 +388,7 @@ describe('runEmulation', () => {
     expect(result.syscalls[2]?.call).toBe('exit(0)');
   });
 
-  it.each(['x86-64', 'x86-32', 'arm', 'arm64'])(
+  it.each(['x86-64', 'x86-32', 'arm', 'arm-thumb', 'arm64'])(
     '%s XOR decoder restores and executes its payload',
     async (arch) => {
       const preset = PRESETS.find((p) => p.arch === arch && p.id.startsWith('exit-'))!;

@@ -58,6 +58,15 @@ export const ARCHES: ArchDef[] = [
     registerRe: String.raw`(?:r\d{1,2}|pc|lr|sp|ip|fp|sl|sb|cpsr|spsr)`,
   },
   {
+    id: 'arm-thumb',
+    label: 'ARM Thumb',
+    ksArch: 1,
+    ksMode: 16, // KS_MODE_THUMB
+    csArch: 0,
+    csMode: 16, // CS_MODE_THUMB
+    registerRe: String.raw`(?:r\d{1,2}|pc|lr|sp|ip|fp|sl|sb|cpsr|spsr)`,
+  },
+  {
     id: 'arm64',
     label: 'ARM64',
     ksArch: 2,

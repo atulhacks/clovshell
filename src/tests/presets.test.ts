@@ -20,7 +20,7 @@ describe('PRESETS', () => {
   });
 
   it('presets exist for every arch', () => {
-    for (const arch of ['x86-64', 'x86-32', 'arm', 'arm64']) {
+    for (const arch of ['x86-64', 'x86-32', 'arm', 'arm-thumb', 'arm64']) {
       expect(PRESETS.some((p) => p.arch === arch), `no presets for ${arch}`).toBe(true);
     }
   });
@@ -55,7 +55,7 @@ describe('PRESETS', () => {
 
   it('every syscall scaffold assembles for its arch', () => {
     const failures: string[] = [];
-    for (const arch of ['x86-64', 'x86-32', 'arm', 'arm64']) {
+    for (const arch of ['x86-64', 'x86-32', 'arm', 'arm-thumb', 'arm64']) {
       for (const entry of tableFor(arch)) {
         const scaffold = syscallScaffold(arch, entry);
         const res = assemble(arch, scaffold);

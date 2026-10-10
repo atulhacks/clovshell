@@ -30,6 +30,7 @@ describe('syscall tables (ground truth: torvalds/linux)', () => {
     expect(byName('arm', 'exit')?.num).toBe(1);
     expect(byName('arm', 'write')?.num).toBe(4);
     expect(byName('arm', 'execve')?.num).toBe(11);
+    expect(byName('arm-thumb', 'exit')?.num).toBe(1);
   });
 
   it('arm64 numbers (asm-generic table)', () => {
@@ -78,6 +79,12 @@ describe('syscallScaffold', () => {
 
   it('arm: r7 + svc 0', () => {
     const out = syscallScaffold('arm', byName('arm', 'write')!);
+    expect(out).toContain('mov r7, #4');
+    expect(out).toContain('svc 0');
+  });
+
+  it('Thumb: r7 + svc 0', () => {
+    const out = syscallScaffold('arm-thumb', byName('arm-thumb', 'write')!);
     expect(out).toContain('mov r7, #4');
     expect(out).toContain('svc 0');
   });

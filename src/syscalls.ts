@@ -9,7 +9,7 @@ import { getArch } from './engines';
 export function tableFor(archId: string): SyscallEntry[] {
   if (archId === 'x86-64') return x8664;
   if (archId === 'x86-32') return x8632;
-  if (archId === 'arm') return armTable;
+  if (archId === 'arm' || archId === 'arm-thumb') return armTable;
   return arm64Table;
 }
 
@@ -98,7 +98,7 @@ export function syscallScaffold(archId: string, entry: SyscallEntry): string {
   if (archId === 'x86-32') {
     return `; ${entry.name}${entry.args ? `(${entry.args})` : ''} — syscall #${n}\nmov eax, ${n}\n; ebx, ecx, edx, esi, edi, ebp = args\nint 0x80`;
   }
-  if (archId === 'arm') {
+  if (archId === 'arm' || archId === 'arm-thumb') {
     return `; ${entry.name}${entry.args ? `(${entry.args})` : ''} — syscall #${n}\nmov r7, #${n}\n; r0-r5 = args\nsvc 0`;
   }
   return `; ${entry.name}${entry.args ? `(${entry.args})` : ''} — syscall #${n}\nmov x8, ${n}\n; x0-x5 = args\nsvc 0`;

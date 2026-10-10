@@ -14,6 +14,7 @@ test('assembles and disassembles every supported mode', async ({ page }) => {
     { arch: 'x86-64', source: 'mov eax, 42\nret' },
     { arch: 'x86-32', source: 'mov eax, 42\nret' },
     { arch: 'arm', source: 'mov r0, #42\nbx lr' },
+    { arch: 'arm-thumb', source: 'movs r0, #42\nbx lr' },
     { arch: 'arm64', source: 'mov x0, #42\nret' },
   ];
   for (const item of cases) {
@@ -86,6 +87,7 @@ test('runs assembled code through the emulator on every architecture', async ({ 
     { arch: 'x86-64', source: 'mov rdi, 42\nmov rax, 60\nsyscall' },
     { arch: 'x86-32', source: 'xor ebx, ebx\nmov al, 1\nint 0x80' },
     { arch: 'arm', source: 'mov r7, #1\nmov r0, #0\nsvc 0' },
+    { arch: 'arm-thumb', source: 'movs r7, #1\nmovs r0, #0\nsvc #0' },
     { arch: 'arm64', source: 'mov x8, #94\nmov x0, #0\nsvc 0' },
   ];
   for (const item of cases) {
@@ -95,6 +97,29 @@ test('runs assembled code through the emulator on every architecture', async ({ 
     await expect(page.locator('#emu-msg')).toContainText('steps ·');
     await expect(page.locator('#emu-msg')).not.toContainText('✗');
   }
+});
+
+test('Thumb execution reports its mode and decodes an in-place payload', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'Thumb decoder browser regression runs once on desktop Chromium');
+  await openWorkbench(page);
+  await page.locator('#arch-select').selectOption('arm-thumb');
+  await page.locator('#asm-editor-host textarea').fill('movs r0, #0\nmovs r7, #1\nsvc #0');
+  await page.locator('#btn-assemble').click();
+  await expect(page.locator('#asm-msg')).toContainText('assembled');
+  await page.locator('#btn-encode').click();
+  await expect(page.locator('#enc-preview')).toContainText('decode_loop');
+  await page.locator('#btn-encode-load').click();
+  await expect(page.locator('#emu-msg')).toContainText('exit(0)');
+  await expect(page.locator('#stage-after-disasm')).toContainText('addw r4, pc');
+  const evidencePromise = page.waitForEvent('download');
+  await page.locator('#trace-download').click();
+  const evidence = await evidencePromise;
+  const report = JSON.parse(await readFile(await evidence.path(), 'utf8')) as {
+    trace: { mode: string }[]; stages: { mode: string }[]; mutations: unknown[];
+  };
+  expect(report.trace.every((step) => step.mode === 'thumb')).toBe(true);
+  expect(report.stages[0]?.mode).toBe('thumb');
+  expect(report.mutations.length).toBeGreaterThan(0);
 });
 
 test('shows decoder writes and exports the reconstructed runtime stage', async ({ page }, testInfo) => {

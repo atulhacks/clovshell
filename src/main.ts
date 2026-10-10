@@ -593,10 +593,14 @@ function permissionLabel(permissions: number | null): string {
   return `${permissions & 1 ? 'r' : '-'}${permissions & 2 ? 'w' : '-'}${permissions & 4 ? 'x' : '-'}`;
 }
 
-function stageDisassembly(bytes: Uint8Array, address: number): string {
+function executionArch(mode?: 'arm' | 'thumb'): string {
+  return mode === 'thumb' ? 'arm-thumb' : mode === 'arm' ? 'arm' : traceArch;
+}
+
+function stageDisassembly(bytes: Uint8Array, address: number, mode?: 'arm' | 'thumb'): string {
   if (!bytes.length) return 'bytes unavailable';
   if (bytes.every((byte) => byte === 0)) return 'zero-filled page';
-  const decoded = disassemble(traceArch, bytes, 7, address);
+  const decoded = disassemble(executionArch(mode), bytes, 7, address);
   return decoded.insns.length
     ? decoded.insns.map((insn) => `${formatAddress(insn.address)}  ${insn.mnemonic} ${insn.opStr}`.trim()).join('\n')
     : '(undecoded)';
@@ -606,7 +610,7 @@ function showContextStep(step: EmuContextStep, context: EmuContextStep[], row: H
   stageWriterContext.querySelector('.active')?.classList.remove('active');
   stageExecutionContext.querySelector('.active')?.classList.remove('active');
   row.classList.add('active');
-  const decoded = step.bytes.length ? disassemble(traceArch, step.bytes, 1, step.addr).insns[0] : null;
+  const decoded = step.bytes.length ? disassemble(executionArch(step.mode), step.bytes, 1, step.addr).insns[0] : null;
   const instruction = decoded ? `${decoded.mnemonic} ${decoded.opStr}`.trim() : '(undecoded)';
   const prior = context.find((candidate) => candidate.step === step.step - 1);
   stageContextDetail.replaceChildren(
@@ -628,7 +632,7 @@ function renderContextRows(target: HTMLElement, context: EmuContextStep[], activ
     return;
   }
   for (const step of context) {
-    const decoded = step.bytes.length ? disassemble(traceArch, step.bytes, 1, step.addr).insns[0] : null;
+    const decoded = step.bytes.length ? disassemble(executionArch(step.mode), step.bytes, 1, step.addr).insns[0] : null;
     const instruction = decoded ? `${decoded.mnemonic} ${decoded.opStr}`.trim() : '(undecoded)';
     const attrs = { class: `stage-context-row${step.step === activeStep ? ' key' : ''}` };
     const content = [
@@ -685,8 +689,8 @@ function renderStageExplorer(stage: EmuStage): void {
   stageAfterLabel.textContent = formatAddress(address);
   stageBeforeBytes.textContent = before ? toSpacedHex(beforeView) : 'baseline unavailable';
   stageAfterBytes.textContent = toSpacedHex(afterView) || 'snapshot unavailable';
-  stageBeforeDisasm.textContent = before ? stageDisassembly(beforeView, address) : 'initial loaded image';
-  stageAfterDisasm.textContent = stageDisassembly(afterView, address);
+  stageBeforeDisasm.textContent = before ? stageDisassembly(beforeView, address, stage.mode) : 'initial loaded image';
+  stageAfterDisasm.textContent = stageDisassembly(afterView, address, stage.mode);
   renderContextRows(stageWriterContext, stage.writerContext, stage.writerStep);
   renderContextRows(stageExecutionContext, stage.executionContext, stage.firstExecutionStep);
   const selected = stageExecutionContext.querySelector<HTMLElement>(`[data-step="${stage.firstExecutionStep}"]`);
@@ -704,7 +708,7 @@ function selectStage(index: number, focus = false): void {
   if (focus) row.scrollIntoView({ block: 'nearest' });
   const stage = activeTrace.stages[index]!;
   const decoded = stage.instructionBytes.length
-    ? disassemble(traceArch, stage.instructionBytes, 1, stage.entryAddr).insns[0] : null;
+    ? disassemble(executionArch(stage.mode), stage.instructionBytes, 1, stage.entryAddr).insns[0] : null;
   const instruction = decoded ? `${decoded.mnemonic} ${decoded.opStr}`.trim() : '(undecoded)';
   const offset = stage.entryAddr - stage.pageBase;
   const preview = stage.snapshot.slice(Math.max(0, offset), Math.max(0, offset) + 64);
@@ -841,7 +845,7 @@ function renderTrace(result: EmuResult | null): void {
     : `${result.trace.length} instructions captured`;
   const fragment = document.createDocumentFragment();
   for (const [index, step] of result.trace.entries()) {
-    const decoded = step.bytes.length ? disassemble(traceArch, step.bytes, 1, step.addr) : null;
+    const decoded = step.bytes.length ? disassemble(executionArch(step.mode), step.bytes, 1, step.addr) : null;
     const insn = decoded?.insns[0];
     const text = insn ? `${insn.mnemonic} ${insn.opStr}`.trim() : '(undecoded)';
     traceInstructions.push(text);
@@ -909,6 +913,7 @@ traceDownload.addEventListener('click', () => {
       origin: stage.origin,
       pageBase: formatAddress(stage.pageBase),
       entryAddress: formatAddress(stage.entryAddr),
+      mode: stage.mode,
       firstExecutionStep: stage.firstExecutionStep,
       instructionBytes: toHex(stage.instructionBytes),
       snapshot: toHex(stage.snapshot),
@@ -922,11 +927,11 @@ traceDownload.addEventListener('click', () => {
       writerAddress: stage.writerAddr == null ? null : formatAddress(stage.writerAddr),
       contextTruncated: stage.contextTruncated,
       writerContext: stage.writerContext.map((step) => ({
-        number: step.step, address: formatAddress(step.addr), bytes: toHex(step.bytes),
+        number: step.step, address: formatAddress(step.addr), bytes: toHex(step.bytes), mode: step.mode,
         registersBefore: Object.fromEntries(names.map((name, i) => [name, step.registers[i]])),
       })),
       executionContext: stage.executionContext.map((step) => ({
-        number: step.step, address: formatAddress(step.addr), bytes: toHex(step.bytes),
+        number: step.step, address: formatAddress(step.addr), bytes: toHex(step.bytes), mode: step.mode,
         registersBefore: Object.fromEntries(names.map((name, i) => [name, step.registers[i]])),
       })),
     })),
@@ -934,6 +939,7 @@ traceDownload.addEventListener('click', () => {
       number: index + 1,
       address: formatAddress(step.addr),
       bytes: toHex(step.bytes),
+      mode: step.mode,
       instruction: traceInstructions[index],
       registersBefore: Object.fromEntries(names.map((name, i) => [name, step.registers[i]])),
     })),
