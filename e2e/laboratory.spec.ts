@@ -221,3 +221,23 @@ test('large restored source uses the assembly worker at boot', async ({ browser 
     await context.close();
   }
 });
+
+test('desktop WASM preload is browser-specific and does not duplicate downloads', async ({ browser }, testInfo) => {
+  test.skip(!['chromium', 'webkit'].includes(testInfo.project.name), 'desktop preload regression');
+  const context = await browser.newContext({ serviceWorkers: 'block' });
+  try {
+    const page = await context.newPage();
+    const wasmRequests: string[] = [];
+    page.on('request', (request) => {
+      const name = request.url().split('/').at(-1);
+      if (name === 'keystone.wasm' || name === 'capstone.wasm') wasmRequests.push(name);
+    });
+    await page.goto('/');
+    await expect(page.locator('#btn-assemble')).toBeEnabled();
+    expect(wasmRequests.sort()).toEqual(['capstone.wasm', 'keystone.wasm']);
+    const preloads = page.locator('link[rel="preload"][as="fetch"][type="application/wasm"]');
+    await expect(preloads).toHaveCount(testInfo.project.name === 'chromium' ? 2 : 0);
+  } finally {
+    await context.close();
+  }
+});

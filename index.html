@@ -12,7 +12,21 @@
     const ipadDesktop = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
     const handheld = /iPad|iPhone|iPod|Android|Mobile|Tablet|Silk|Kindle|PlayBook|webOS/i.test(ua)
       || navigator.userAgentData?.mobile === true || ipadDesktop;
-    if (handheld) document.documentElement.classList.add('device-handoff');
+    const chromium = navigator.userAgentData?.brands?.some(({ brand }) => /Chromium|Google Chrome|Microsoft Edge/.test(brand))
+      ?? /\b(?:Chrome|Chromium|Edg|OPR)\//.test(ua);
+    if (handheld) {
+      document.documentElement.classList.add('device-handoff');
+    } else if (chromium) {
+      for (const engine of ['keystone', 'capstone']) {
+        const preload = document.createElement('link');
+        preload.rel = 'preload';
+        preload.as = 'fetch';
+        preload.type = 'application/wasm';
+        preload.crossOrigin = 'anonymous';
+        preload.href = `./wasm/${engine}.wasm`;
+        document.head.append(preload);
+      }
+    }
   </script>
   <style>
     #device-handoff { display: none; }
