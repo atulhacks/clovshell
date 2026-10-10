@@ -1,7 +1,7 @@
 {
-  "name": "clovshell — shellcode workbench",
+  "name": "clovshell — desktop shellcode laboratory",
   "short_name": "clovshell",
-  "description": "Assemble, disassemble, emulate and extract x86 / ARM / ARM64 shellcode — entirely in your browser.",
+  "description": "Desktop-browser laboratory for local x86 / ARM / ARM64 assembly, emulation and evidence inspection.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

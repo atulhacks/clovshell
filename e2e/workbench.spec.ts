@@ -2,6 +2,14 @@ import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
+test.beforeEach(async ({}, testInfo) => {
+  test.skip(testInfo.project.name.startsWith('mobile-') || testInfo.project.name.startsWith('tablet-'), 'Laboratory is desktop-only');
+});
+
+async function showTab(page: Page, name: string): Promise<void> {
+  await page.locator(`#lab-tab-${name}`).click();
+}
+
 async function openWorkbench(page: Page): Promise<void> {
   await page.goto('/');
   await expect(page.locator('#btn-assemble')).toBeEnabled();
@@ -106,12 +114,14 @@ test('Thumb execution reports its mode and decodes an in-place payload', async (
   await page.locator('#asm-editor-host textarea').fill('movs r0, #0\nmovs r7, #1\nsvc #0');
   await page.locator('#btn-assemble').click();
   await expect(page.locator('#asm-msg')).toContainText('assembled');
+  await showTab(page, 'tools');
   await page.locator('#btn-encode').click();
   await expect(page.locator('#enc-preview')).toContainText('decode_loop');
   await page.locator('#btn-encode-load').click();
   await expect(page.locator('#emu-msg')).toContainText('exit(0)');
   await expect(page.locator('#stage-after-disasm')).toContainText('addw r4, pc');
   const evidencePromise = page.waitForEvent('download');
+  await showTab(page, 'trace');
   await page.locator('#trace-download').click();
   const evidence = await evidencePromise;
   const report = JSON.parse(await readFile(await evidence.path(), 'utf8')) as {
@@ -133,6 +143,7 @@ test('execution flow retains hot back edges beyond the trace cap', async ({ page
   await expect(page.locator('#emu-msg')).toContainText('exit(0)');
   await expect(page.locator('#trace-stats')).toContainText('first 400');
   await expect(page.locator('#flow-stats')).toContainText('transfers');
+  await showTab(page, 'flow');
   const hot = page.locator('#flow-list .flow-row').filter({ hasText: 'back edge' });
   await expect(hot).toContainText('499×');
   await hot.click();
@@ -140,6 +151,7 @@ test('execution flow retains hot back edges beyond the trace cap', async ({ page
   await page.locator('#flow-filter').selectOption('all');
   expect(await page.locator('#flow-list .flow-row').count()).toBeGreaterThan(2);
   const evidencePromise = page.waitForEvent('download');
+  await showTab(page, 'trace');
   await page.locator('#trace-download').click();
   const evidence = await evidencePromise;
   const report = JSON.parse(await readFile(await evidence.path(), 'utf8')) as {
@@ -157,6 +169,7 @@ test('path divergence lab replays scenarios and opens their individual traces', 
     'cmp rdi, 1', 'je one', 'xor edi, edi', 'jmp done',
     'one:', 'mov edi, 1', 'done:', 'mov eax, 60', 'syscall',
   ].join('\n'));
+  await showTab(page, 'scenarios');
   await page.locator('#scenario-args').fill('0, 1, 2');
   await page.locator('#btn-explore').click();
   await expect(page.locator('#scenario-results .scenario-row')).toHaveCount(3);
@@ -179,6 +192,7 @@ test('input fixture supplies read bytes in a normal browser emulation', async ({
     'sub rsp, 16', 'xor edi, edi', 'mov rsi, rsp', 'mov edx, 1',
     'xor eax, eax', 'syscall', 'movzx edi, byte ptr [rsp]', 'mov eax, 60', 'syscall',
   ].join('\n'));
+  await showTab(page, 'scenarios');
   await page.locator('#scenario-input').fill('41');
   await page.locator('#btn-run-emu').click();
   await expect(page.locator('#emu-msg')).toContainText('exit(65)');
@@ -191,20 +205,24 @@ test('shows decoder writes and exports the reconstructed runtime stage', async (
   await page.locator('#asm-editor-host textarea').fill('xor edi, edi\nmov eax, 60\nsyscall');
   await page.locator('#btn-assemble').click();
   await expect(page.locator('#asm-msg')).toContainText('assembled');
+  await showTab(page, 'tools');
   await page.locator('#btn-encode').click();
   await expect(page.locator('#enc-preview')).not.toHaveClass(/empty/);
   await page.locator('#btn-encode-load').click();
   await expect(page.locator('#emu-msg')).toContainText('exit(0)');
   await expect(page.locator('#mutation-stats')).toContainText('executed');
+  await showTab(page, 'mutations');
   await expect(page.locator('#mutation-list .mutation-row').first()).toBeVisible();
   await expect(page.locator('#mutation-detail')).toContainText('original image');
   await expect(page.locator('#mutation-detail')).toContainText('first execution');
   const stagePromise = page.waitForEvent('download');
+  await showTab(page, 'trace');
   await page.locator('#stage-download').click();
   const stage = await stagePromise;
   expect(stage.suggestedFilename()).toBe('runtime-stage-x86-64.bin');
   expect((await readFile(await stage.path())).toString('hex')).toContain('31ffb83c0000000f05');
   const evidencePromise = page.waitForEvent('download');
+  await showTab(page, 'trace');
   await page.locator('#trace-download').click();
   const evidence = await evidencePromise;
   expect(evidence.suggestedFilename()).toBe('trace-x86-64.json');
@@ -231,10 +249,12 @@ test('shows mapped-code provenance and downloads its first-execution snapshot', 
   await page.locator('#asm-editor-host textarea').fill(source);
   await page.locator('#btn-run-emu').click();
   await expect(page.locator('#emu-msg')).toContainText('exit(0)');
+  await showTab(page, 'flow');
   const stageHop = page.locator('#flow-list .flow-row').filter({ hasText: 'stage hop' });
   await expect(stageHop).toHaveCount(1);
   await stageHop.click();
   await expect(page.locator('#flow-detail')).toContainText('30000000');
+  await showTab(page, 'stages');
   const mapped = page.locator('#stage-list .stage-row').filter({ hasText: 'mapped' });
   await expect(mapped).toHaveCount(1);
   await mapped.click();
@@ -252,6 +272,7 @@ test('shows mapped-code provenance and downloads its first-execution snapshot', 
   expect(snapshot.suggestedFilename()).toMatch(/^stage-x86-64-S\d+-30000000\.bin$/);
   expect((await readFile(await snapshot.path())).subarray(0, 9).toString('hex')).toBe('31ffb83c0000000f05');
   const evidencePromise = page.waitForEvent('download');
+  await showTab(page, 'trace');
   await page.locator('#trace-download').click();
   const evidence = await evidencePromise;
   const report = JSON.parse(await readFile(await evidence.path(), 'utf8')) as {
@@ -280,6 +301,7 @@ test('retains post-cap writer and execution context in the Stage Explorer', asyn
   await page.locator('#asm-editor-host textarea').fill(source);
   await page.locator('#btn-run-emu').click();
   await expect(page.locator('#emu-msg')).toContainText('exit(0)');
+  await showTab(page, 'stages');
   await page.locator('#stage-list .stage-row').filter({ hasText: 'mapped' }).click();
   await expect(page.locator('#stage-writer-context .stage-context-row.key')).toContainText('rep movsb');
   await expect(page.locator('#stage-execution-context .stage-context-row.key')).toContainText('xor edi, edi');
@@ -290,6 +312,7 @@ test('retains post-cap writer and execution context in the Stage Explorer', asyn
   await page.locator('#stage-execution-context .stage-context-row.key').click();
   await expect(page.locator('#stage-context-detail')).toContainText('xor edi, edi');
   const download = page.waitForEvent('download');
+  await showTab(page, 'trace');
   await page.locator('#trace-download').click();
   const report = JSON.parse(await readFile(await (await download).path(), 'utf8')) as {
     stages: { origin: string; writerStep: number | null; firstExecutionStep: number;

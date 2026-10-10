@@ -3,9 +3,32 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>clovshell — shellcode workbench</title>
-  <meta name="description" content="Assemble, disassemble, emulate and extract x86 / ARM / ARM64 shellcode — entirely in your browser. XOR encoder, ROP gadget finder, syscall reference. Powered by keystone + capstone + unicorn (WASM)." />
+  <title>clovshell — desktop shellcode laboratory</title>
+  <meta name="description" content="A desktop-browser laboratory for assembling, disassembling, emulating and inspecting x86 / ARM / ARM64 shellcode locally with WebAssembly." />
   <meta name="theme-color" content="#080808" />
+  <script>
+    // Device class is chosen before the deferred Laboratory module can load.
+    const ua = navigator.userAgent || '';
+    const ipadDesktop = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+    const handheld = /iPad|iPhone|iPod|Android|Mobile|Tablet|Silk|Kindle|PlayBook|webOS/i.test(ua)
+      || navigator.userAgentData?.mobile === true || ipadDesktop;
+    if (handheld) document.documentElement.classList.add('device-handoff');
+  </script>
+  <style>
+    #device-handoff { display: none; }
+    html.device-handoff body { margin: 0; background: #080808; color: #e8e8e8; }
+    html.device-handoff #boot, html.device-handoff .rail, html.device-handoff .page { display: none !important; }
+    html.device-handoff #device-handoff { display: grid; min-height: 100svh; place-items: center; padding: 24px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+    .handoff-card { width: min(100%, 520px); padding: clamp(24px, 7vw, 48px); border: 1px solid #303030; background: #101010; box-shadow: 0 24px 80px #0008; }
+    .handoff-mark { color: #fff; font-size: 13px; letter-spacing: .24em; font-weight: 700; }
+    .handoff-rule { height: 1px; margin: 24px 0; background: #303030; }
+    .handoff-kicker { color: #a7a7a7; font-size: 11px; letter-spacing: .18em; text-transform: uppercase; }
+    .handoff-card h1 { font-size: clamp(28px, 9vw, 48px); line-height: 1.08; letter-spacing: -.055em; margin: 20px 0; }
+    .handoff-card p { color: #aaa; line-height: 1.7; font-size: 14px; }
+    .handoff-card button { margin-top: 20px; padding: 12px 16px; color: #080808; background: #eee; border: 1px solid #eee; font: inherit; cursor: pointer; }
+    .handoff-card button:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
+    .handoff-foot { margin-top: 32px; color: #777; font-size: 11px; }
+  </style>
   <script>
     // apply the saved theme before first paint (module scripts are deferred —
     // without this, returning visitors would flash the default theme)
@@ -15,15 +38,27 @@
     } catch (e) { /* storage unavailable — default theme */ }
   </script>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
-  <meta property="og:title" content="clovshell — shellcode workbench" />
+  <meta property="og:title" content="clovshell — desktop shellcode laboratory" />
   <meta property="og:description" content="assemble · disassemble · emulate · extract — x86/ARM shellcode with an XOR encoder, ROP gadget finder and syscall reference, fully client-side" />
   <meta property="og:type" content="website" />
   <meta name="twitter:card" content="summary" />
-  <meta name="twitter:title" content="clovshell — shellcode workbench" />
+  <meta name="twitter:title" content="clovshell — desktop shellcode laboratory" />
   <meta name="twitter:description" content="assemble · disassemble · emulate · extract — x86/ARM shellcode, fully client-side" />
   <link rel="manifest" href="./manifest.webmanifest" />
 </head>
 <body>
+  <div id="device-handoff">
+    <div class="handoff-card">
+      <div class="handoff-mark">✣ &nbsp; CLOVSHELL</div>
+      <div class="handoff-rule"></div>
+      <div class="handoff-kicker">Laboratory / desktop edition</div>
+      <h1>Bring this to a desktop.</h1>
+      <p>The full Laboratory needs a desktop computer. Open this same link in a desktop browser to assemble, emulate, and inspect your work.</p>
+      <button type="button" id="handoff-copy">Copy this link</button>
+      <div class="handoff-foot">Your shared source stays in the link.</div>
+    </div>
+  </div>
+  <a class="lab-skip" href="#lab-source">Skip to workspace</a>
   <noscript>
     <style>#boot { display: none; }</style>
     <p style="color:#f87171;font-family:monospace;padding:2rem">
@@ -380,6 +415,6 @@
     </footer>
   </main>
 
-  <script type="module" src="/src/main.ts"></script>
+  <script type="module" src="/src/entry.ts"></script>
 </body>
 </html>

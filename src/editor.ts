@@ -9,6 +9,7 @@ export interface EditorHandle {
   setValue(v: string): void;
   setArch(arch: ArchDef): void;
   onChange(cb: () => void): void;
+  refresh(): void;
   /** insert text at the caret (replacing the selection), keeping focus */
   insertAtCursor(text: string): void;
 }
@@ -80,6 +81,10 @@ export function createEditor(root: HTMLElement, initial: string, arch: ArchDef):
 
   // tab inserts spaces instead of moving focus
   ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      root.closest('.section')?.querySelector<HTMLElement>('.section-head button')?.focus();
+      return;
+    }
     if (e.key === 'Tab' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       const { selectionStart: s, selectionEnd: en, value } = ta;
@@ -107,6 +112,7 @@ export function createEditor(root: HTMLElement, initial: string, arch: ArchDef):
     onChange(cb: () => void) {
       changeCb = cb;
     },
+    refresh,
     insertAtCursor(text: string) {
       const { selectionStart: s, selectionEnd: en, value } = ta;
       // tidy separation from what's already there

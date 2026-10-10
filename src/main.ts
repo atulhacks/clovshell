@@ -1,6 +1,8 @@
 // clovshell — application wiring.
 
 import './style.css';
+import './laboratory.css';
+import { activateLabTab, mountLaboratory, setLabEvidenceReady } from './laboratory';
 import {
   ARCHES,
   assemble,
@@ -42,7 +44,8 @@ import {
   flashCopyFeedback, toast,
 } from './ui';
 
-const STORAGE_KEY = 'clovshell:v1';
+const STORAGE_KEY = 'clovshell:session:v2';
+const LEGACY_STORAGE_KEY = 'clovshell:v1';
 const MAX_ASM_CHARS = 64 * 1024;
 
 const SAMPLE = `; clovshell — assemble me (ctrl/cmd + enter)
@@ -50,6 +53,8 @@ mov eax, 0x64696b73
 mov ebx, 0x37333331
 xor ecx, ecx
 nop`;
+
+mountLaboratory();
 
 // --- state ------------------------------------------------------------------
 
@@ -174,6 +179,7 @@ function parseInputFixture(): Uint8Array {
 // editor lives inside the ASSEMBLY section
 $('#asm-editor-host').append(editorTemplate('Assembly source'));
 const editor = createEditor($('#asm-editor-host'), SAMPLE, getArch(archId));
+document.addEventListener('lab:layout', () => requestAnimationFrame(() => editor.refresh()));
 
 // --- export cards -------------------------------------------------------------
 
@@ -552,7 +558,10 @@ function selectMutation(index: number, focus = false): void {
   selectedMutation = index;
   const row = mutationRows[index]!;
   row.classList.add('active');
-  if (focus) row.scrollIntoView({ block: 'nearest' });
+  if (focus) {
+    activateLabTab('mutations');
+    row.scrollIntoView({ block: 'nearest' });
+  }
   const mutation = activeTrace.mutations[index]!;
   const original = imageSlice(activeTrace.initialCode, activeTrace.codeBase, mutation.addr, mutation.after.length);
   const final = imageSlice(activeTrace.finalCode, activeTrace.codeBase, mutation.addr, mutation.after.length);
@@ -730,7 +739,10 @@ function selectStage(index: number, focus = false): void {
   selectedStage = index;
   const row = stageRows[index]!;
   row.classList.add('active');
-  if (focus) row.scrollIntoView({ block: 'nearest' });
+  if (focus) {
+    activateLabTab('stages');
+    row.scrollIntoView({ block: 'nearest' });
+  }
   const stage = activeTrace.stages[index]!;
   const decoded = stage.instructionBytes.length
     ? disassemble(executionArch(stage.mode), stage.instructionBytes, 1, stage.entryAddr).insns[0] : null;
@@ -825,6 +837,7 @@ function selectTraceStep(index: number, focus = false): void {
   tracePrev.disabled = index === 0;
   traceNext.disabled = index === activeTrace.trace.length - 1;
   if (focus) {
+    activateLabTab('trace');
     row.focus();
     row.scrollIntoView({ block: 'nearest' });
   }
@@ -1090,6 +1103,8 @@ stageSnapshotDownload.addEventListener('click', () => {
 
 function renderEmu(result: EmuResult | null): void {
   renderTrace(result);
+  setLabEvidenceReady(result !== null);
+  $('#lab-run-state').textContent = result ? `${result.steps} STEPS / ${archId.toUpperCase()}` : 'NO RUN';
   if (!result) {
     emuLog.replaceChildren(el('div', { class: 'listing-empty' }, EMU_PLACEHOLDER));
     emuRegs.replaceChildren();
@@ -1122,18 +1137,23 @@ function renderEmu(result: EmuResult | null): void {
 }
 
 let emuBusy = false;
+let runAbort: AbortController | null = null;
 
-function runEmulationInWorker(arch: string, bytes: Uint8Array, entryArg: bigint | null, inputBytes: Uint8Array): Promise<EmuResult> {
+function runEmulationInWorker(arch: string, bytes: Uint8Array, entryArg: bigint | null, inputBytes: Uint8Array, signal: AbortSignal): Promise<EmuResult> {
   return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(new DOMException('aborted', 'AbortError')); return; }
     const worker = new Worker(new URL('./emu-worker.ts', import.meta.url), { type: 'module' });
     const timer = setTimeout(() => {
-      worker.terminate();
+      finish();
       reject(new Error('emulation timed out after 30 seconds'));
     }, 30_000);
     const finish = (): void => {
       clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
       worker.terminate();
     };
+    const abort = (): void => { finish(); reject(new DOMException('aborted', 'AbortError')); };
+    signal.addEventListener('abort', abort, { once: true });
     worker.onmessage = (event: MessageEvent<{ result?: EmuResult; error?: string }>) => {
       finish();
       if (event.data.result) resolve(event.data.result);
@@ -1163,12 +1183,16 @@ async function runEmu(): Promise<void> {
     return;
   }
   emuBusy = true;
+  const controller = new AbortController();
+  runAbort = controller;
+  $('#lab-cancel-run').classList.remove('hidden');
+  $('#lab-run-state').textContent = 'RUNNING…';
   btnRunEmu.disabled = true;
   btnExplore.disabled = true;
   btnRunEmu.textContent = '… running';
   setMsg(emuMsg, 'assembling…', '');
   try {
-    const { result: res } = await assembleInWorker(runArch, src);
+    const { result: res } = await assembleInWorker(runArch, src, controller.signal);
     if (archId !== runArch || editor.getValue().trim() !== src) return;
     if (!res.ok || !res.bytes) {
       toast('fix the assembly errors first');
@@ -1185,24 +1209,32 @@ async function runEmu(): Promise<void> {
     }
     const inputBytes = parseInputFixture();
     setMsg(emuMsg, 'loading unicorn engine (first run downloads ~1 MB)…', '');
-    const result = await runEmulationInWorker(runArch, res.bytes, arg ? arg.value : null, inputBytes);
+    const result = await runEmulationInWorker(runArch, res.bytes, arg ? arg.value : null, inputBytes, controller.signal);
     if (archId === runArch && editor.getValue().trim() === src) {
       setChip(chipUnicorn, 'ok');
       renderEmu(result);
+      activateLabTab('trace');
     }
   } catch (err) {
-    if (archId === runArch && editor.getValue().trim() === src) {
+    if (controller.signal.aborted && archId === runArch && editor.getValue().trim() === src) {
+      $('#lab-run-state').textContent = 'CANCELLED';
+      setMsg(emuMsg, 'run cancelled', 'warn');
+    } else if (archId === runArch && editor.getValue().trim() === src) {
       setMsg(emuMsg, `✗ ${err instanceof Error ? err.message : String(err)}`, 'err');
     }
   } finally {
+    if (runAbort === controller) runAbort = null;
+    $('#lab-cancel-run').classList.add('hidden');
     emuBusy = false;
     btnRunEmu.disabled = false;
     btnExplore.disabled = false;
     btnRunEmu.textContent = '▶ run';
+    if ($('#lab-run-state').textContent === 'RUNNING…') $('#lab-run-state').textContent = 'NO RUN';
   }
 }
 
 btnRunEmu.addEventListener('click', () => void runEmu());
+$('#lab-cancel-run').addEventListener('click', () => runAbort?.abort());
 
 let scenarioAbort: (() => void) | null = null;
 let scenarioGeneration = 0;
@@ -1336,11 +1368,13 @@ btnExplore.addEventListener('click', () => void explorePaths());
 btnCancelScenarios.addEventListener('click', () => {
   scenarioAbort?.();
 });
-scenarioArgs.addEventListener('input', clearScenarioResults);
+scenarioArgs.addEventListener('input', () => { clearScenarioResults(); saveState(); });
 scenarioInput.addEventListener('input', () => {
   clearScenarioResults();
   renderEmu(null);
+  saveState();
 });
+emuArgInput.addEventListener('input', saveState);
 $('#btn-clear-emu').addEventListener('click', () => {
   clearScenarioResults();
   renderEmu(null);
@@ -1668,7 +1702,7 @@ document.addEventListener('drop', (e) => {
 // --- offline (production only) ----------------------------------------------------
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
-  window.addEventListener('load', () => {
+  const registerOffline = () => {
     navigator.serviceWorker
       .register('sw.js')
       .then(async (reg) => {
@@ -1691,7 +1725,9 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
       .catch(() => {
         /* offline support is best-effort */
       });
-  });
+  };
+  if (document.readyState === 'complete') registerOffline();
+  else window.addEventListener('load', registerOffline, { once: true });
 }
 
 // --- syscall reference --------------------------------------------------------------
@@ -1741,6 +1777,7 @@ const autoDisassemble = debounce(() => {
 }, 350);
 
 editor.onChange(() => {
+  runAbort?.abort();
   clearScenarioResults();
   cancelAssembly();
   lastAssembled = null;
@@ -1801,6 +1838,7 @@ $('#btn-copy-shellcode').addEventListener('click', async () => {
 });
 
 archSelect.addEventListener('change', () => {
+  runAbort?.abort();
   clearScenarioResults();
   cancelAssembly();
   lastAssembled = null;
@@ -1846,19 +1884,27 @@ $('#btn-share').addEventListener('click', async () => {
 // --- persistence --------------------------------------------------------------------
 
 interface PersistedState {
+  v?: 2;
   arch?: string;
   a?: string;
   h?: string;
   bc?: string;
+  arg?: string;
+  fixture?: string;
+  scenarios?: string;
 }
 
 function saveState(): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      v: 2,
       arch: archId,
       a: editor.getValue(),
       h: hexInput.value,
       bc: badCharsInput.value,
+      arg: emuArgInput.value,
+      fixture: scenarioInput.value,
+      scenarios: scenarioArgs.value,
     }));
   } catch {
     /* storage unavailable — fine */
@@ -1870,11 +1916,16 @@ function loadState(): void {
   let state: PersistedState | null = null;
   if (hash) state = decodeState<PersistedState>(hash[1]!);
   if (!state) {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) state = JSON.parse(raw) as PersistedState;
-    } catch {
-      /* ignore */
+    for (const key of [STORAGE_KEY, LEGACY_STORAGE_KEY]) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw || raw.length > MAX_ASM_CHARS + MAX_HEX_BYTES * 4 + 16384) continue;
+        const parsed: unknown = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          state = parsed as PersistedState;
+          break;
+        }
+      } catch { /* try the next storage version */ }
     }
   }
   if (!state) return;
@@ -1885,7 +1936,10 @@ function loadState(): void {
   }
   if (typeof state.a === 'string' && state.a.trim() && state.a.length <= MAX_ASM_CHARS) editor.setValue(state.a);
   if (typeof state.h === 'string' && state.h.length <= MAX_HEX_BYTES * 4) hexInput.value = state.h;
-  if (typeof state.bc === 'string') badCharsInput.value = state.bc;
+  if (typeof state.bc === 'string' && state.bc.length <= 1024) badCharsInput.value = state.bc;
+  if (typeof state.arg === 'string' && state.arg.length <= 64) emuArgInput.value = state.arg;
+  if (typeof state.fixture === 'string' && state.fixture.length <= MAX_INPUT_BYTES * 4) scenarioInput.value = state.fixture;
+  if (typeof state.scenarios === 'string' && state.scenarios.length <= 1024) scenarioArgs.value = state.scenarios;
 }
 
 // --- boot ----------------------------------------------------------------------------

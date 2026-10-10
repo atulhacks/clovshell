@@ -4,20 +4,21 @@
 
 # clovshell
 
-**A shellcode workbench in your browser.** Assemble, disassemble, emulate, inspect, and export x86 and ARM shellcode.
+**A desktop-browser shellcode laboratory.** Assemble, disassemble, emulate, inspect, and export x86 and ARM shellcode in a persistent multi-pane workspace.
 
 [Live demo](https://atulhacks.github.io/clovshell/) · [Run locally](#run-locally)
 
 [![CI](https://github.com/atulhacks/clovshell/actions/workflows/ci.yml/badge.svg)](https://github.com/atulhacks/clovshell/actions/workflows/ci.yml)
 [![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
 
-<img src="docs/shot-hero.png" width="800" alt="clovshell editor, shellcode bytes, and disassembly" />
+<img src="docs/shot-hero.png" width="800" alt="Clovshell Laboratory with source editor, byte evidence, inspector, and analysis dock" />
 
 </div>
 
 clovshell runs [Keystone](https://www.keystone-engine.org/), [Capstone](https://www.capstone-engine.org/),
 and [Unicorn](https://www.unicorn-engine.org/) as WebAssembly. Assembly and emulation happen locally;
-your source and shellcode are not sent to a backend.
+your source and shellcode are not sent to a backend. The Laboratory opens on desktop computers;
+phones and tablets receive a link-preserving handoff without downloading the emulation engines.
 
 | Target | Mode | Emulated syscall entry |
 | --- | --- | --- |
@@ -102,7 +103,10 @@ and Capstone WASM files into `public/wasm/` through `postinstall`.
 - Browse per-architecture Linux syscall numbers and insert an assembly scaffold at the cursor.
 - Load tested `execve` and exit presets with one click. Share source and architecture through a
   URL fragment; the editor also restores local state.
-- Choose among five themes. The layout works at phone widths and respects reduced-motion settings.
+- Choose among five themes. Resize the source and analysis dock with pointer or keyboard, switch
+  among Trace, Flow, Scenarios, Mutations, Stages, Tools, and Reference tabs, and reset the layout
+  from the left rail. A narrow or zoomed desktop window retains the Laboratory with an evidence
+  toggle and collapsible inspector. The editor supports Escape to return focus to its header.
 - Install the production build as a PWA. Once its assets have been precached, it works offline,
   including the lazy-loaded emulator engines.
 
@@ -159,7 +163,8 @@ host, publish the contents of `dist/`.
 | `src/emu.ts`, `src/emu-worker.ts`, `src/stage-explorer.ts` | Emulation, execution capture, and stage comparison |
 | `src/encoder.ts`, `src/gadgets.ts`, `src/gadget-worker.ts` | XOR wrappers and bounded gadget scans |
 | `src/syscalls*.ts`, `src/presets.ts` | Syscall reference, scaffolds, and examples |
-| `src/main.ts`, `src/editor.ts`, `src/ui.ts` | Workbench interface and state |
+| `src/entry.ts`, `src/laboratory.ts`, `src/laboratory.css` | Desktop preflight, Laboratory shell, tabs, splitters, and layout persistence |
+| `src/main.ts`, `src/editor.ts`, `src/ui.ts` | Engine-facing interface and editor state |
 | `src/tests/` | Engine and UI-logic regression tests |
 | `scripts/` | WASM copy, syscall-table generation, service-worker finalization |
 | `public/sw.js` | Production offline cache |
