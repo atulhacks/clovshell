@@ -26,6 +26,7 @@ declare module '@alexaltea/unicorn-js/x86' {
     mem_unmap(addr: number, size: number): void;
     mem_write(addr: number, bytes: Uint8Array | number[]): void;
     mem_read(addr: number, size: number): Uint8Array;
+    mem_regions(): { begin: bigint; end: bigint; perms: number }[];
     emu_start(begin: number, until: number, timeoutUs: number, count: number): void;
     emu_stop(): void;
     close(): void;

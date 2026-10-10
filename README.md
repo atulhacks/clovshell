@@ -55,8 +55,14 @@ and Capstone WASM files into `public/wasm/` through `postinstall`.
   with buttons or arrow keys, or save the trace as JSON.
 - Inspect the **Code Mutation Atlas** for writes to the loaded code image: original bytes, pre/post
   write bytes, the writing instruction, and the first observed execution of changed bytes. Download
-  the final code-image snapshot as `.bin` or the trace and mutation evidence as JSON. Capture is
-  bounded to 2,048 writes; the atlas does not yet follow code generated in new mappings.
+  the final code-image snapshot as `.bin` or the trace and mutation evidence as JSON. Image mutations
+  are bounded to 2,048 changed spans.
+- Follow the **Stage Graph** when code is written to a new `mmap` allocation, the stack, or the original
+  image. It links the writing stage to the first execution of changed bytes, records `mmap`/`mprotect`
+  transitions, and preserves a 4 KiB snapshot at first execution—even beyond the 400-step trace cap
+  or when those bytes are overwritten later. Download individual stage snapshots or the full JSON
+  evidence. Capture is bounded to 64 stage snapshots, 64 pending dirty pages, and 256 observed bytes
+  per individual write; a limited capture is labeled in the result.
 - Set an initial first-argument register (`rdi`, `r0`, or `x0`) for function-style shellcode.
 - Keep the UI responsive with worker-based emulation, a 30-second outer timeout, and a
   100,000-instruction limit.

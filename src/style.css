@@ -1297,6 +1297,28 @@ body.dragging::after {
 .mutation-label { color: var(--fg-dim); }
 .mutation-field code { overflow-wrap: anywhere; color: var(--fg); }
 .mutation-jumps { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+.stage-panel { border-top: 1px solid var(--border); }
+.stage-row {
+  display: grid;
+  grid-template-columns: 4ch 7ch 10ch minmax(0, 1fr) 6ch;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font: 11px var(--mono);
+  cursor: pointer;
+}
+.stage-row:hover, .stage-row:focus-visible { background: var(--bg-hover); }
+.stage-row.active { background: var(--accent-soft); box-shadow: inset 2px 0 var(--accent); }
+.stage-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage-id, .stage-row .trace-address { color: var(--accent); }
+.stage-edge { color: var(--fg-dim); }
+.stage-origin { color: var(--fg); }
 
 @media (max-width: 860px) {
   .trace-grid { grid-template-columns: 1fr; }
@@ -1312,6 +1334,8 @@ body.dragging::after {
   .mutation-row { grid-template-columns: 5ch 9ch minmax(0, 1fr); }
   .mutation-row .mutation-executed, .mutation-row .dim { display: none; }
   .mutation-field { grid-template-columns: 1fr; gap: 1px; }
+  .stage-row { grid-template-columns: 4ch 6ch minmax(0, 1fr) 6ch; }
+  .stage-row .trace-address { display: none; }
 }
 
 /* ------------------------------------------------------------------ emulation */

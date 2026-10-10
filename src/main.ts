@@ -103,6 +103,10 @@ const stageDownload = $<HTMLButtonElement>('#stage-download');
 const mutationStats = $('#mutation-stats');
 const mutationList = $('#mutation-list');
 const mutationDetail = $('#mutation-detail');
+const stageStats = $('#stage-stats');
+const stageList = $('#stage-list');
+const stageDetail = $('#stage-detail');
+const stageSnapshotDownload = $<HTMLButtonElement>('#stage-snapshot-download');
 const btnRunEmu = $<HTMLButtonElement>('#btn-run-emu');
 const emuArgInput = $<HTMLInputElement>('#emu-arg');
 const emuArgLabel = $('#emu-arg-label');
@@ -490,6 +494,8 @@ let traceRows: HTMLButtonElement[] = [];
 let traceInstructions: string[] = [];
 let mutationRows: HTMLButtonElement[] = [];
 let selectedMutation = 0;
+let stageRows: HTMLButtonElement[] = [];
+let selectedStage = 0;
 
 function imageSlice(image: Uint8Array | null, base: number, address: number, size: number): Uint8Array | null {
   const offset = address - base;
@@ -570,6 +576,90 @@ function renderMutations(result: EmuResult | null): void {
   selectMutation(0);
 }
 
+function permissionLabel(permissions: number | null): string {
+  if (permissions === null) return 'unknown';
+  return `${permissions & 1 ? 'r' : '-'}${permissions & 2 ? 'w' : '-'}${permissions & 4 ? 'x' : '-'}`;
+}
+
+function selectStage(index: number, focus = false): void {
+  if (!activeTrace || index < 0 || index >= activeTrace.stages.length) return;
+  stageRows[selectedStage]?.classList.remove('active');
+  selectedStage = index;
+  const row = stageRows[index]!;
+  row.classList.add('active');
+  if (focus) row.scrollIntoView({ block: 'nearest' });
+  const stage = activeTrace.stages[index]!;
+  const decoded = stage.instructionBytes.length
+    ? disassemble(traceArch, stage.instructionBytes, 1, stage.entryAddr).insns[0] : null;
+  const instruction = decoded ? `${decoded.mnemonic} ${decoded.opStr}`.trim() : '(undecoded)';
+  const offset = stage.entryAddr - stage.pageBase;
+  const preview = stage.snapshot.slice(Math.max(0, offset), Math.max(0, offset) + 64);
+  const transitions = activeTrace.mapEvents
+    .filter((event) => event.addr <= stage.pageBase && stage.pageBase < event.addr + event.size && event.step < stage.firstExecutionStep)
+    .map((event) => `${event.operation} #${event.step} ${permissionLabel(event.permissions)}`);
+  const actions: HTMLElement[] = [];
+  if (stage.fromStageId !== null) {
+    const button = el('button', { class: 'btn ghost', type: 'button' }, `source S${stage.fromStageId}`);
+    button.addEventListener('click', () => selectStage(stage.fromStageId!, true));
+    actions.push(button);
+  }
+  if (stage.writerStep !== null && stage.writerStep <= activeTrace.trace.length) {
+    const button = el('button', { class: 'btn ghost', type: 'button' }, `writer #${stage.writerStep}`);
+    button.addEventListener('click', () => selectTraceStep(stage.writerStep! - 1, true));
+    actions.push(button);
+  }
+  if (stage.firstExecutionStep <= activeTrace.trace.length) {
+    const button = el('button', { class: 'btn ghost', type: 'button' }, `execution #${stage.firstExecutionStep}`);
+    button.addEventListener('click', () => selectTraceStep(stage.firstExecutionStep - 1, true));
+    actions.push(button);
+  }
+  stageDetail.replaceChildren(
+    el('div', { class: 'mutation-title' }, `S${stage.id} · ${stage.origin} · ${formatAddress(stage.pageBase)}`),
+    mutationField('first execution', `#${stage.firstExecutionStep} at ${formatAddress(stage.entryAddr)}`),
+    mutationField('instruction', `${toSpacedHex(stage.instructionBytes)} · ${instruction}`),
+    mutationField('writer', stage.writerStep == null ? 'original or unobserved' : `#${stage.writerStep} at ${formatAddress(stage.writerAddr!)}`),
+    mutationField('permissions', permissionLabel(stage.permissions)),
+    mutationField('map timeline', transitions.join(' → ') || 'initial mapping'),
+    mutationField('snapshot bytes', toSpacedHex(preview) || 'snapshot unavailable'),
+    el('div', { class: 'mutation-jumps' }, ...actions),
+  );
+  stageSnapshotDownload.disabled = stage.snapshot.length === 0;
+}
+
+function renderStages(result: EmuResult | null): void {
+  stageRows = [];
+  stageList.replaceChildren();
+  stageDetail.replaceChildren();
+  stageSnapshotDownload.disabled = true;
+  if (!result) {
+    stageStats.textContent = '';
+    return;
+  }
+  const generated = result.stages.filter((stage) => stage.origin !== 'image').length;
+  stageStats.textContent = `${result.stages.length} stage${result.stages.length === 1 ? '' : 's'} · ${generated} outside image${result.stagesTruncated || result.mapEventsTruncated ? ' · capture limited' : ''}`;
+  const fragment = document.createDocumentFragment();
+  for (const stage of result.stages) {
+    const row = el('button', { class: 'stage-row', type: 'button',
+      'aria-label': `Stage ${stage.id}, ${stage.origin}, first executed at ${formatAddress(stage.entryAddr)}` },
+      el('span', { class: 'stage-id' }, `S${stage.id}`),
+      el('span', { class: 'stage-edge' }, stage.fromStageId == null ? 'entry' : `S${stage.fromStageId} →`),
+      el('span', { class: 'stage-origin' }, stage.origin),
+      el('span', { class: 'trace-address' }, formatAddress(stage.entryAddr)),
+      el('span', { class: 'dim' }, `#${stage.firstExecutionStep}`),
+    );
+    row.addEventListener('click', () => selectStage(stage.id));
+    fragment.append(row);
+    stageRows.push(row);
+  }
+  stageList.append(fragment);
+  if (!result.stages.length) {
+    stageDetail.append(el('div', { class: 'listing-empty' }, 'No executed stages were captured.'));
+    return;
+  }
+  selectedStage = 0;
+  selectStage(0);
+}
+
 function selectTraceStep(index: number, focus = false): void {
   if (!activeTrace || index < 0 || index >= activeTrace.trace.length) return;
   traceRows[selectedTraceStep]?.classList.remove('active');
@@ -617,6 +707,7 @@ function renderTrace(result: EmuResult | null): void {
   traceInstructions = [];
   if (!result || result.trace.length === 0) {
     renderMutations(result);
+    renderStages(result);
     return;
   }
 
@@ -645,6 +736,7 @@ function renderTrace(result: EmuResult | null): void {
   selectedTraceStep = 0;
   selectTraceStep(0);
   renderMutations(result);
+  renderStages(result);
 }
 
 tracePrev.addEventListener('click', () => selectTraceStep(selectedTraceStep - 1, true));
@@ -678,6 +770,28 @@ traceDownload.addEventListener('click', () => {
       firstExecutionStep: mutation.firstExecutionStep,
       firstExecutionAddress: mutation.firstExecutionAddr == null ? null : formatAddress(mutation.firstExecutionAddr),
     })),
+    stagesTruncated: activeTrace.stagesTruncated,
+    mapEventsTruncated: activeTrace.mapEventsTruncated,
+    mapEvents: activeTrace.mapEvents.map((event) => ({
+      step: event.step,
+      operation: event.operation,
+      address: formatAddress(event.addr),
+      size: event.size,
+      permissions: permissionLabel(event.permissions),
+    })),
+    stages: activeTrace.stages.map((stage) => ({
+      id: stage.id,
+      fromStageId: stage.fromStageId,
+      origin: stage.origin,
+      pageBase: formatAddress(stage.pageBase),
+      entryAddress: formatAddress(stage.entryAddr),
+      firstExecutionStep: stage.firstExecutionStep,
+      instructionBytes: toHex(stage.instructionBytes),
+      snapshot: toHex(stage.snapshot),
+      permissions: permissionLabel(stage.permissions),
+      writerStep: stage.writerStep,
+      writerAddress: stage.writerAddr == null ? null : formatAddress(stage.writerAddr),
+    })),
     trace: activeTrace.trace.map((step, index) => ({
       number: index + 1,
       address: formatAddress(step.addr),
@@ -690,6 +804,12 @@ traceDownload.addEventListener('click', () => {
 });
 stageDownload.addEventListener('click', () => {
   if (activeTrace?.finalCode) downloadBytes(`runtime-stage-${traceArch}.bin`, activeTrace.finalCode);
+});
+stageSnapshotDownload.addEventListener('click', () => {
+  const stage = activeTrace?.stages[selectedStage];
+  if (stage?.snapshot.length) {
+    downloadBytes(`stage-${traceArch}-S${stage.id}-${formatAddress(stage.pageBase)}.bin`, stage.snapshot);
+  }
 });
 
 function renderEmu(result: EmuResult | null): void {

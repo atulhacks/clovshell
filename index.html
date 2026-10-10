@@ -210,7 +210,7 @@
             <span class="trace-position" id="trace-position"></span>
             <button class="btn ghost" id="trace-next" type="button" aria-label="Next instruction">next →</button>
             <button class="btn ghost" id="trace-download" type="button">save JSON</button>
-            <button class="btn ghost" id="stage-download" type="button">save runtime stage</button>
+            <button class="btn ghost" id="stage-download" type="button">save final image</button>
           </div>
         </div>
         <div class="trace-grid">
@@ -229,6 +229,19 @@
           <div class="mutation-grid">
             <div class="mutation-list" id="mutation-list" aria-label="Code mutations"></div>
             <div class="mutation-detail" id="mutation-detail"></div>
+          </div>
+        </div>
+        <div class="stage-panel" id="stage-panel">
+          <div class="mutation-head">
+            <div>
+              <h3 class="emu-sub">stage graph <span class="dim">— memory writes → first execution</span></h3>
+              <span class="stats" id="stage-stats"></span>
+            </div>
+            <button class="btn ghost" id="stage-snapshot-download" type="button">save selected snapshot</button>
+          </div>
+          <div class="mutation-grid">
+            <div class="mutation-list" id="stage-list" aria-label="Executed code stages"></div>
+            <div class="mutation-detail" id="stage-detail"></div>
           </div>
         </div>
       </div>

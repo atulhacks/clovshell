@@ -129,6 +129,45 @@ test('shows decoder writes and exports the reconstructed runtime stage', async (
   expect(report.finalCode).toContain('31ffb83c0000000f05');
 });
 
+test('shows mapped-code provenance and downloads its first-execution snapshot', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name.startsWith('mobile-'), 'stage graph download regression runs on desktop browsers');
+  await openWorkbench(page);
+  const source = [
+    'xor edi, edi', 'mov esi, 4096', 'mov edx, 3', 'mov r10d, 0x22',
+    'mov r8d, -1', 'xor r9d, r9d', 'mov eax, 9', 'syscall',
+    'mov rbx, rax', 'lea rsi, [rip + payload]', 'mov rdi, rbx', 'mov ecx, 9',
+    'rep movsb', 'mov rdi, rbx', 'mov esi, 4096', 'mov edx, 5',
+    'mov eax, 10', 'syscall', 'jmp rbx',
+    'payload:', 'xor edi, edi', 'mov eax, 60', 'syscall',
+  ].join('\n');
+  await page.locator('#asm-editor-host textarea').fill(source);
+  await page.locator('#btn-run-emu').click();
+  await expect(page.locator('#emu-msg')).toContainText('exit(0)');
+  const mapped = page.locator('#stage-list .stage-row').filter({ hasText: 'mapped' });
+  await expect(mapped).toHaveCount(1);
+  await mapped.click();
+  await expect(page.locator('#stage-detail')).toContainText('mmap');
+  await expect(page.locator('#stage-detail')).toContainText('mprotect');
+  await expect(page.locator('#stage-detail')).toContainText('r-x');
+  const snapshotPromise = page.waitForEvent('download');
+  await page.locator('#stage-snapshot-download').click();
+  const snapshot = await snapshotPromise;
+  expect(snapshot.suggestedFilename()).toMatch(/^stage-x86-64-S\d+-30000000\.bin$/);
+  expect((await readFile(await snapshot.path())).subarray(0, 9).toString('hex')).toBe('31ffb83c0000000f05');
+  const evidencePromise = page.waitForEvent('download');
+  await page.locator('#trace-download').click();
+  const evidence = await evidencePromise;
+  const report = JSON.parse(await readFile(await evidence.path(), 'utf8')) as {
+    stages: { origin: string; snapshot: string; writerStep: number | null }[];
+    mapEvents: { operation: string }[];
+  };
+  expect(report.stages.find((stage) => stage.origin === 'mapped')).toMatchObject({
+    snapshot: expect.stringContaining('31ffb83c0000000f05'),
+    writerStep: expect.any(Number),
+  });
+  expect(report.mapEvents.map((event) => event.operation)).toEqual(['mmap', 'mprotect']);
+});
+
 test('reloads and runs offline after installation', async ({ page, context, browserName }) => {
   // Playwright 1.63 WebKit aborts SW-served navigations after setOffline(true):
   // https://github.com/microsoft/playwright/issues/42775

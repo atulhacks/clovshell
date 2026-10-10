@@ -81,6 +81,29 @@ export interface EmuMutation {
   firstExecutionAddr: number | null;
 }
 
+export interface EmuMapEvent {
+  step: number;
+  operation: 'mmap' | 'mprotect' | 'munmap';
+  addr: number;
+  size: number;
+  permissions: number | null;
+}
+
+export interface EmuStage {
+  id: number;
+  fromStageId: number | null;
+  origin: 'image' | 'code slack' | 'stack' | 'mapped' | 'other';
+  pageBase: number;
+  entryAddr: number;
+  firstExecutionStep: number;
+  instructionBytes: Uint8Array;
+  /** page contents at first execution, not at emulation exit */
+  snapshot: Uint8Array;
+  permissions: number | null;
+  writerStep: number | null;
+  writerAddr: number | null;
+}
+
 export interface EmuResult {
   ok: boolean;
   steps: number;
@@ -93,6 +116,10 @@ export interface EmuResult {
   traceTruncated: boolean;
   mutations: EmuMutation[];
   mutationsTruncated: boolean;
+  stages: EmuStage[];
+  stagesTruncated: boolean;
+  mapEvents: EmuMapEvent[];
+  mapEventsTruncated: boolean;
   codeBase: number;
   initialCode: Uint8Array;
   finalCode: Uint8Array | null;
@@ -114,6 +141,19 @@ const STEP_LIMIT = 100_000;
 const TRACE_CAP = 400;
 const MUTATION_CAP = 2048;
 const MUTATION_BYTES_CAP = 256;
+const PAGE_SIZE = 4096;
+const STAGE_CAP = 64;
+const TRACKED_PAGE_CAP = 64;
+const PENDING_WRITE_CAP = 2048;
+const MAP_EVENT_CAP = 256;
+
+interface DirtyPage {
+  changed: Uint8Array;
+  count: number;
+  writerStep: Int32Array;
+  writerAddr: Uint32Array;
+  writerStageId: Int32Array;
+}
 // NOTE: emu_start's timeout parameter must stay 0 — unicorn implements timeouts
 // with a QEMU timer thread, which aborts under WASM ("qemu_thread_create: Not
 // supported"). Runaway loops are caught by the HOOK_CODE step counter instead.
@@ -225,6 +265,7 @@ interface SyscallCtx {
   syscalls: EmuSyscall[];
   mmapCursor: number;
   nextFd: number;
+  recordMapEvent(operation: EmuMapEvent['operation'], addr: number, size: number, permissions: number | null): void;
   stop(reason: string): void;
 }
 
@@ -365,6 +406,7 @@ function emulateSyscall(ctx: SyscallCtx, name: string, args: bigint[]): bigint |
         return syscallFailure(ctx, `${name}(${hex(mapArgs[0] ?? 0n)}, ${requested})`, EINVAL, 'mapping failed');
       }
       ctx.mmapCursor += span;
+      ctx.recordMapEvent('mmap', page, span, Number((mapArgs[2] ?? 7n) & 7n));
       ctx.syscalls.push({ call: `${name}(${hex(mapArgs[0] ?? 0n)}, ${requested}, ${mapArgs[2] ?? 0n}, …)`, ret: hex(page) });
       return BigInt(page);
     }
@@ -376,13 +418,14 @@ function emulateSyscall(ctx: SyscallCtx, name: string, args: bigint[]): bigint |
       if (addr > BigInt(Number.MAX_SAFE_INTEGER) || addr % 0x1000n !== 0n || size <= 0n || size > BigInt(MAX_MMAP_BYTES)) {
         return syscallFailure(ctx, call, EINVAL, 'EINVAL');
       }
+      const span = Math.ceil(Number(size) / 0x1000) * 0x1000;
       try {
-        const span = Math.ceil(Number(size) / 0x1000) * 0x1000;
         if (name === 'mprotect') ctx.e.mem_protect(Number(addr), span, Number((args[2] ?? 0n) & 7n));
         else ctx.e.mem_unmap(Number(addr), span);
       } catch {
         return syscallFailure(ctx, call, EINVAL, 'EINVAL');
       }
+      ctx.recordMapEvent(name, Number(addr), span, name === 'mprotect' ? Number((args[2] ?? 0n) & 7n) : null);
       ctx.syscalls.push({ call, ret: '0' });
       return 0n;
     }
@@ -444,11 +487,21 @@ export async function runEmulation(
 
   const trace: EmuStep[] = [];
   const mutations: EmuMutation[] = [];
-  const pendingWrites: { addr: number; before: Uint8Array; writerStep: number; writerAddr: number }[] = [];
+  const stages: EmuStage[] = [];
+  const mapEvents: EmuMapEvent[] = [];
+  const pendingWrites: {
+    addr: number; before: Uint8Array; writerStep: number; writerAddr: number; writerStageId: number;
+  }[] = [];
+  const dirtyPages = new Map<number, DirtyPage>();
+  const pageStageIds = new Map<number, number>();
+  const pendingExecutionMutations = new Map<number, Set<EmuMutation>>();
   let steps = 0;
   let currentInstructionAddr = CODE;
+  let activeStageId = -1;
   let traceTruncated = false;
   let mutationsTruncated = false;
+  let stagesTruncated = false;
+  let mapEventsTruncated = false;
   let exitReason = 'fell off the end of the shellcode';
   let stopped = false;
 
@@ -525,11 +578,71 @@ export async function runEmulation(
     syscalls,
     mmapCursor: MMAP_BASE,
     nextFd: 3,
+    recordMapEvent(operation, addr, size, permissions) {
+      if (mapEvents.length < MAP_EVENT_CAP) mapEvents.push({ step: steps, operation, addr, size, permissions });
+      else mapEventsTruncated = true;
+      if (operation === 'munmap') {
+        for (let page = addr; page < addr + size; page += PAGE_SIZE) {
+          dirtyPages.delete(page);
+          pageStageIds.delete(page);
+        }
+      }
+    },
     stop(reason) {
       exitReason = reason;
       stopped = true;
       e.emu_stop();
     },
+  };
+
+  const pageBaseOf = (addr: number): number => Math.floor(addr / PAGE_SIZE) * PAGE_SIZE;
+  const watchAddress = (addr: number): boolean =>
+    (addr >= CODE_MAP && addr < CODE_MAP + CODE_SPAN)
+    || (addr >= STACK && addr < STACK + 0x100000)
+    || (addr >= MMAP_BASE && addr < ctx.mmapCursor);
+
+  const markDirty = (addr: number, write: typeof pendingWrites[number]): void => {
+    const page = pageBaseOf(addr);
+    let dirty = dirtyPages.get(page);
+    if (!dirty) {
+      if (dirtyPages.size >= TRACKED_PAGE_CAP) {
+        stagesTruncated = true;
+        return;
+      }
+      dirty = {
+        changed: new Uint8Array(PAGE_SIZE),
+        count: 0,
+        writerStep: new Int32Array(PAGE_SIZE),
+        writerAddr: new Uint32Array(PAGE_SIZE),
+        writerStageId: new Int32Array(PAGE_SIZE),
+      };
+      dirtyPages.set(page, dirty);
+    }
+    const offset = addr - page;
+    if (!dirty.changed[offset]) dirty.count++;
+    dirty.changed[offset] = 1;
+    dirty.writerStep[offset] = write.writerStep;
+    dirty.writerAddr[offset] = write.writerAddr;
+    dirty.writerStageId[offset] = write.writerStageId;
+  };
+
+  const addPendingMutation = (mutation: EmuMutation): void => {
+    for (let page = pageBaseOf(mutation.addr); page < mutation.addr + mutation.after.length; page += PAGE_SIZE) {
+      let pending = pendingExecutionMutations.get(page);
+      if (!pending) {
+        pending = new Set();
+        pendingExecutionMutations.set(page, pending);
+      }
+      pending.add(mutation);
+    }
+  };
+
+  const removePendingMutation = (mutation: EmuMutation): void => {
+    for (let page = pageBaseOf(mutation.addr); page < mutation.addr + mutation.after.length; page += PAGE_SIZE) {
+      const pending = pendingExecutionMutations.get(page);
+      pending?.delete(mutation);
+      if (pending?.size === 0) pendingExecutionMutations.delete(page);
+    }
   };
 
   const settleWrites = (): void => {
@@ -541,21 +654,81 @@ export async function runEmulation(
         continue;
       }
       let start = 0;
-      while (start < after.length && after[start] === write.before[start]) start++;
-      if (start === after.length) continue;
-      let end = after.length;
-      while (end > start && after[end - 1] === write.before[end - 1]) end--;
-      mutations.push({
-        writerStep: write.writerStep,
-        writerAddr: write.writerAddr,
-        addr: write.addr + start,
-        before: write.before.slice(start, end),
-        after: after.slice(start, end),
-        firstExecutionStep: null,
-        firstExecutionAddr: null,
-      });
+      while (start < after.length) {
+        while (start < after.length && after[start] === write.before[start]) start++;
+        if (start >= after.length) break;
+        let end = start + 1;
+        while (end < after.length && after[end] !== write.before[end]) end++;
+        for (let offset = start; offset < end; offset++) markDirty(write.addr + offset, write);
+        const address = write.addr + start;
+        const imageStart = Math.max(address, CODE);
+        const imageEnd = Math.min(write.addr + end, CODE + bytes.length);
+        if (imageEnd > imageStart) {
+          if (mutations.length < MUTATION_CAP) {
+            const from = imageStart - write.addr;
+            const to = imageEnd - write.addr;
+            const mutation: EmuMutation = {
+              writerStep: write.writerStep,
+              writerAddr: write.writerAddr,
+              addr: imageStart,
+              before: write.before.slice(from, to),
+              after: after.slice(from, to),
+              firstExecutionStep: null,
+              firstExecutionAddr: null,
+            };
+            mutations.push(mutation);
+            addPendingMutation(mutation);
+          } else mutationsTruncated = true;
+        }
+        start = end;
+      }
     }
     pendingWrites.length = 0;
+  };
+
+  const captureStage = (addr: number, instructionBytes: Uint8Array, page: number, dirtyOffset: number): void => {
+    if (stages.length >= STAGE_CAP) {
+      stagesTruncated = true;
+      return;
+    }
+    const dirty = dirtyPages.get(page);
+    const writerStep = dirtyOffset >= 0 ? dirty!.writerStep[dirtyOffset]! : null;
+    const writerAddr = dirtyOffset >= 0 ? dirty!.writerAddr[dirtyOffset]! : null;
+    const writerStageId = dirtyOffset >= 0 ? dirty!.writerStageId[dirtyOffset]! : -1;
+    let snapshot = new Uint8Array(0);
+    try {
+      snapshot = Uint8Array.from(e.mem_read(page, PAGE_SIZE));
+    } catch {
+      stagesTruncated = true;
+    }
+    let permissions: number | null = null;
+    try {
+      const region = e.mem_regions().find((item) => page >= Number(item.begin) && page <= Number(item.end));
+      permissions = region?.perms ?? null;
+    } catch { /* Region metadata is not available from this engine. */ }
+    const location = page === pageBaseOf(addr) ? addr : page;
+    const origin: EmuStage['origin'] =
+      location >= CODE && location < CODE + bytes.length ? 'image'
+      : location >= CODE_MAP && location < CODE_MAP + CODE_SPAN ? 'code slack'
+      : location >= STACK && location < STACK + 0x100000 ? 'stack'
+      : location >= MMAP_BASE && location < ctx.mmapCursor ? 'mapped' : 'other';
+    const id = stages.length;
+    stages.push({
+      id,
+      fromStageId: writerStageId >= 0 ? writerStageId : activeStageId >= 0 ? activeStageId : null,
+      origin,
+      pageBase: page,
+      entryAddr: addr,
+      firstExecutionStep: steps,
+      instructionBytes: Uint8Array.from(instructionBytes),
+      snapshot,
+      permissions,
+      writerStep,
+      writerAddr,
+    });
+    pageStageIds.set(page, id);
+    activeStageId = id;
+    dirtyPages.delete(page);
   };
 
   // --- syscall hooks
@@ -589,15 +762,23 @@ export async function runEmulation(
     }
     steps++;
     currentInstructionAddr = a;
+    const firstPage = pageBaseOf(a);
+    const lastPage = pageBaseOf(a + Math.max(size - 1, 0));
     let instructionBytes = new Uint8Array(0);
-    if (trace.length < TRACE_CAP || mutations.some((m) => m.firstExecutionStep === null)) {
+    if (trace.length < TRACE_CAP || !pageStageIds.has(firstPage)
+        || dirtyPages.has(firstPage) || dirtyPages.has(lastPage)
+        || pendingExecutionMutations.has(firstPage) || pendingExecutionMutations.has(lastPage)) {
       try {
         instructionBytes = Uint8Array.from(e.mem_read(a, size));
       } catch {
         // A fetch fault is reported by the invalid-memory hook.
       }
     }
-    for (const mutation of mutations) {
+    const pending = new Set([
+      ...(pendingExecutionMutations.get(firstPage) ?? []),
+      ...(pendingExecutionMutations.get(lastPage) ?? []),
+    ]);
+    for (const mutation of pending) {
       if (mutation.firstExecutionStep !== null) continue;
       const start = Math.max(a, mutation.addr);
       const end = Math.min(a + instructionBytes.length, mutation.addr + mutation.after.length);
@@ -612,7 +793,40 @@ export async function runEmulation(
       if (matches) {
         mutation.firstExecutionStep = steps;
         mutation.firstExecutionAddr = a;
+        removePendingMutation(mutation);
       }
+    }
+    let stagePage = firstPage;
+    let dirtyOffset = -1;
+    for (let page = firstPage; page <= lastPage; page += PAGE_SIZE) {
+      const dirty = dirtyPages.get(page);
+      if (!dirty) continue;
+      const start = Math.max(a, page);
+      const end = Math.min(a + instructionBytes.length, page + PAGE_SIZE);
+      for (let address = start; address < end; address++) {
+        const offset = address - page;
+        if (!dirty.changed[offset]) continue;
+        const priorId = pageStageIds.get(page);
+        const priorByte = priorId == null ? undefined : stages[priorId]?.snapshot[offset];
+        if (priorByte === instructionBytes[address - a]) {
+          dirty.changed[offset] = 0;
+          dirty.count--;
+          continue;
+        }
+        stagePage = page;
+        dirtyOffset = offset;
+        break;
+      }
+      if (dirty.count === 0) dirtyPages.delete(page);
+      if (dirtyOffset >= 0) break;
+    }
+    if (!pageStageIds.has(firstPage) && (dirtyOffset < 0 || stagePage !== firstPage)) {
+      captureStage(a, instructionBytes, firstPage, -1);
+    }
+    if (dirtyOffset >= 0) {
+      captureStage(a, instructionBytes, stagePage, dirtyOffset);
+    } else if (pageStageIds.has(firstPage)) {
+      activeStageId = pageStageIds.get(firstPage)!;
     }
     if (trace.length < TRACE_CAP) {
       trace.push({
@@ -632,25 +846,37 @@ export async function runEmulation(
   // the next instruction boundary rather than trusting its scalar value.
   e.hook_add(uc.HOOK_MEM_WRITE!, (_h: unknown, _type: number, addr: bigint, size: number) => {
     const a = Number(addr);
-    const start = Math.max(a, CODE);
-    const end = Math.min(a + size, CODE + bytes.length);
-    if (end <= start || !Number.isSafeInteger(a)) return;
-    if (mutations.length + pendingWrites.length >= MUTATION_CAP) {
-      mutationsTruncated = true;
-      return;
+    if (!Number.isSafeInteger(a) || size <= 0) return;
+    if (size > MUTATION_BYTES_CAP) {
+      stagesTruncated = true;
+      if (a < CODE + bytes.length && a + size > CODE) mutationsTruncated = true;
     }
-    if (end - start > MUTATION_BYTES_CAP) mutationsTruncated = true;
-    try {
-      pendingWrites.push({
-        addr: start,
-        before: Uint8Array.from(e.mem_read(start, Math.min(end - start, MUTATION_BYTES_CAP))),
-        writerStep: steps,
-        writerAddr: currentInstructionAddr,
-      });
-    } catch {
-      // An invalid write is reported separately by HOOK_MEM_INVALID.
+    const end = a + Math.min(size, MUTATION_BYTES_CAP);
+    for (let start = a; start < end;) {
+      if (!watchAddress(start)) {
+        start++;
+        continue;
+      }
+      const span = Math.min(end - start, PAGE_SIZE - (start - pageBaseOf(start)));
+      if (pendingWrites.length >= PENDING_WRITE_CAP) {
+        stagesTruncated = true;
+        if (start < CODE + bytes.length && start + span > CODE) mutationsTruncated = true;
+        break;
+      }
+      try {
+        pendingWrites.push({
+          addr: start,
+          before: Uint8Array.from(e.mem_read(start, span)),
+          writerStep: steps,
+          writerAddr: currentInstructionAddr,
+          writerStageId: activeStageId,
+        });
+      } catch {
+        // An invalid write is reported separately by HOOK_MEM_INVALID.
+      }
+      start += span;
     }
-  }, null, CODE, CODE + Math.max(bytes.length - 1, 0));
+  });
 
   // --- fault reporting
   const memType = (t: number): string =>
@@ -707,6 +933,10 @@ export async function runEmulation(
     traceTruncated,
     mutations,
     mutationsTruncated,
+    stages,
+    stagesTruncated,
+    mapEvents,
+    mapEventsTruncated,
     codeBase: CODE,
     initialCode: Uint8Array.from(bytes),
     finalCode,
