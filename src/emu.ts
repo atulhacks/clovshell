@@ -4,6 +4,8 @@
 import type { UnicornInstance } from '@alexaltea/unicorn-js/x86';
 
 import { x8664, x8632, arm as armTable, arm64 as arm64Table } from './syscalls-data';
+import { FlowCollector } from './flow';
+import type { FlowGraph } from './flow';
 
 export type { UnicornInstance };
 
@@ -138,6 +140,7 @@ export interface EmuResult {
   stagesTruncated: boolean;
   mapEvents: EmuMapEvent[];
   mapEventsTruncated: boolean;
+  flow: FlowGraph;
   codeBase: number;
   initialCode: Uint8Array;
   finalCode: Uint8Array | null;
@@ -525,6 +528,7 @@ export async function runEmulation(
   const mutations: EmuMutation[] = [];
   const stages: EmuStage[] = [];
   const mapEvents: EmuMapEvent[] = [];
+  const flow = new FlowCollector();
   const pendingWrites: {
     addr: number; before: Uint8Array; beforeSnapshot: Uint8Array | null;
     writerStep: number; writerAddr: number; writerStageId: number; writerContext: EmuContextStep[];
@@ -743,6 +747,7 @@ export async function runEmulation(
   const captureStage = (addr: number, instructionBytes: Uint8Array, page: number, dirtyOffset: number): void => {
     if (stages.length >= STAGE_CAP) {
       stagesTruncated = true;
+      activeStageId = -1;
       return;
     }
     const dirty = dirtyPages.get(page);
@@ -901,6 +906,8 @@ export async function runEmulation(
     } else if (pageStageIds.has(firstPage)) {
       activeStageId = pageStageIds.get(firstPage)!;
     }
+    flow.record(steps, a, size, instructionBytes, contextStep.mode ?? null,
+      activeStageId >= 0 ? activeStageId : null);
     if (trace.length < TRACE_CAP) {
       trace.push({
         addr: a,
@@ -1021,6 +1028,7 @@ export async function runEmulation(
     stagesTruncated,
     mapEvents,
     mapEventsTruncated,
+    flow: flow.result(),
     codeBase: CODE,
     initialCode: Uint8Array.from(bytes),
     finalCode,

@@ -27,6 +27,8 @@ import { createEditor, editorTemplate } from './editor';
 import { entryArgReg } from './emu';
 import type { EmuContextStep, EmuMutation, EmuResult, EmuStage } from './emu';
 import { diffStagePages } from './stage-explorer';
+import { flowEdgeLabels, isFlowTransfer } from './flow';
+import type { FlowEdge, FlowNode } from './flow';
 import { xorEncode } from './encoder';
 import { gadgetRows } from './gadgets';
 import type { Gadget } from './gadgets';
@@ -100,6 +102,10 @@ const tracePosition = $('#trace-position');
 const tracePrev = $<HTMLButtonElement>('#trace-prev');
 const traceNext = $<HTMLButtonElement>('#trace-next');
 const traceDownload = $<HTMLButtonElement>('#trace-download');
+const flowStats = $('#flow-stats');
+const flowFilter = $<HTMLSelectElement>('#flow-filter');
+const flowList = $('#flow-list');
+const flowDetail = $('#flow-detail');
 const stageDownload = $<HTMLButtonElement>('#stage-download');
 const mutationStats = $('#mutation-stats');
 const mutationList = $('#mutation-list');
@@ -504,6 +510,9 @@ let traceArch = '';
 let selectedTraceStep = 0;
 let traceRows: HTMLButtonElement[] = [];
 let traceInstructions: string[] = [];
+let flowEdgesShown: FlowEdge[] = [];
+let flowRows: HTMLButtonElement[] = [];
+let selectedFlow = 0;
 let mutationRows: HTMLButtonElement[] = [];
 let selectedMutation = 0;
 let stageRows: HTMLButtonElement[] = [];
@@ -825,6 +834,97 @@ function selectTraceStep(index: number, focus = false): void {
   }
 }
 
+function flowInstruction(node: FlowNode): string {
+  const insn = node.bytes.length
+    ? disassemble(executionArch(node.mode ?? undefined), node.bytes, 1, node.addr).insns[0]
+    : null;
+  return insn ? `${insn.mnemonic} ${insn.opStr}`.trim() : '(undecoded)';
+}
+
+function selectFlow(index: number, focus = false): void {
+  if (!activeTrace || index < 0 || index >= flowEdgesShown.length) return;
+  flowRows[selectedFlow]?.classList.remove('active');
+  selectedFlow = index;
+  const row = flowRows[index]!;
+  row.classList.add('active');
+  if (focus) row.scrollIntoView({ block: 'nearest' });
+  const edge = flowEdgesShown[index]!;
+  const from = activeTrace.flow.nodes[edge.fromId]!;
+  const to = activeTrace.flow.nodes[edge.toId]!;
+  const jump = (label: string, step: number): HTMLElement => {
+    if (step < 1 || step > activeTrace!.trace.length) {
+      return el('span', { class: 'dim' }, `${label} #${step} (beyond trace)`);
+    }
+    const button = el('button', { class: 'btn ghost', type: 'button' }, `${label} #${step}`);
+    button.addEventListener('click', () => selectTraceStep(step - 1, true));
+    return button;
+  };
+  const stageJump = (stageId: number | null): HTMLElement | null => {
+    if (stageId === null || !activeTrace?.stages[stageId]) return null;
+    const button = el('button', { class: 'btn ghost', type: 'button' }, `stage S${stageId}`);
+    button.addEventListener('click', () => selectStage(stageId, true));
+    return button;
+  };
+  flowDetail.replaceChildren(
+    el('div', { class: 'mutation-title' }, `${flowEdgeLabels(from, to).join(' · ')} · ${edge.hits} traversal${edge.hits === 1 ? '' : 's'}`),
+    mutationField('from', `${formatAddress(from.addr)} · ${flowInstruction(from)} · S${from.stageId ?? '—'}${from.mode ? ` · ${from.mode}` : ''}`),
+    mutationField('to', `${formatAddress(to.addr)} · ${flowInstruction(to)} · S${to.stageId ?? '—'}${to.mode ? ` · ${to.mode}` : ''}`),
+    mutationField('observed', `first #${edge.firstStep} · last #${edge.lastStep}`),
+    el('div', { class: 'mutation-jumps' },
+      jump('source', edge.firstStep - 1), jump('destination', edge.firstStep),
+      ...[stageJump(from.stageId), stageJump(to.stageId)].filter((item): item is HTMLElement => item !== null)),
+  );
+}
+
+function renderFlow(result: EmuResult | null): void {
+  flowRows = [];
+  flowEdgesShown = [];
+  flowList.replaceChildren();
+  flowDetail.replaceChildren();
+  if (!result) {
+    flowStats.textContent = '';
+    return;
+  }
+  const nodes = result.flow.nodes;
+  const transfers = result.flow.edges.filter((edge) =>
+    isFlowTransfer(nodes[edge.fromId]!, nodes[edge.toId]!));
+  flowStats.textContent = `${nodes.length} instructions · ${result.flow.edges.length} edges · ${transfers.length} transfers${result.flow.truncated ? ' · capture limited' : ''}`;
+  const filtered = result.flow.edges.filter((edge) => {
+    const from = nodes[edge.fromId]!;
+    const to = nodes[edge.toId]!;
+    return flowFilter.value === 'all' || (flowFilter.value === 'stage'
+      ? from.stageId !== to.stageId || from.mode !== to.mode
+      : isFlowTransfer(from, to));
+  });
+  flowEdgesShown = filtered.sort((a, b) => b.hits - a.hits || a.firstStep - b.firstStep).slice(0, 200);
+  if (!flowEdgesShown.length) {
+    flowList.append(el('div', { class: 'listing-empty' }, 'No matching transfers were observed.'));
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  for (const [index, edge] of flowEdgesShown.entries()) {
+    const from = nodes[edge.fromId]!;
+    const to = nodes[edge.toId]!;
+    const row = el('button', { class: 'flow-row', type: 'button',
+      'aria-label': `${flowEdgeLabels(from, to).join(', ')} from ${formatAddress(from.addr)} to ${formatAddress(to.addr)}, ${edge.hits} traversals` },
+      el('span', { class: 'flow-count' }, `${edge.hits}×`),
+      el('span', { class: 'trace-address' }, `${formatAddress(from.addr)} → ${formatAddress(to.addr)}`),
+      el('span', { class: 'flow-kind' }, flowEdgeLabels(from, to).join(' · ')),
+    );
+    row.addEventListener('click', () => selectFlow(index));
+    fragment.append(row);
+    flowRows.push(row);
+  }
+  flowList.append(fragment);
+  if (filtered.length > flowEdgesShown.length) {
+    flowList.append(el('div', { class: 'listing-empty' }, `Top 200 of ${filtered.length} edges shown · full graph in JSON`));
+  }
+  selectedFlow = 0;
+  selectFlow(0);
+}
+
+flowFilter.addEventListener('change', () => renderFlow(activeTrace));
+
 function renderTrace(result: EmuResult | null): void {
   activeTrace = result;
   tracePanel.classList.toggle('hidden', !result || result.trace.length === 0);
@@ -834,6 +934,7 @@ function renderTrace(result: EmuResult | null): void {
   traceRows = [];
   traceInstructions = [];
   if (!result || result.trace.length === 0) {
+    renderFlow(result);
     renderMutations(result);
     renderStages(result);
     return;
@@ -863,6 +964,7 @@ function renderTrace(result: EmuResult | null): void {
   traceList.append(fragment);
   selectedTraceStep = 0;
   selectTraceStep(0);
+  renderFlow(result);
   renderMutations(result);
   renderStages(result);
 }
@@ -888,6 +990,18 @@ traceDownload.addEventListener('click', () => {
     codeBase: formatAddress(activeTrace.codeBase),
     initialCode: toHex(activeTrace.initialCode),
     finalCode: activeTrace.finalCode ? toHex(activeTrace.finalCode) : null,
+    flow: {
+      truncated: activeTrace.flow.truncated,
+      nodes: activeTrace.flow.nodes.map((node) => ({
+        id: node.id, address: formatAddress(node.addr), size: node.size,
+        bytes: toHex(node.bytes), mode: node.mode, stageId: node.stageId,
+        hits: node.hits, firstStep: node.firstStep, lastStep: node.lastStep,
+      })),
+      edges: activeTrace.flow.edges.map((edge) => ({
+        fromId: edge.fromId, toId: edge.toId, hits: edge.hits,
+        firstStep: edge.firstStep, lastStep: edge.lastStep,
+      })),
+    },
     mutationsTruncated: activeTrace.mutationsTruncated,
     mutations: activeTrace.mutations.map((mutation) => ({
       writerStep: mutation.writerStep,

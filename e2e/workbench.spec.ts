@@ -122,6 +122,34 @@ test('Thumb execution reports its mode and decodes an in-place payload', async (
   expect(report.mutations.length).toBeGreaterThan(0);
 });
 
+test('execution flow retains hot back edges beyond the trace cap', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'flow aggregation browser regression runs once on desktop Chromium');
+  await openWorkbench(page);
+  await page.locator('#asm-editor-host textarea').fill([
+    'mov ecx, 500', 'loop_start:', 'dec ecx', 'jne loop_start',
+    'xor edi, edi', 'mov eax, 60', 'syscall',
+  ].join('\n'));
+  await page.locator('#btn-run-emu').click();
+  await expect(page.locator('#emu-msg')).toContainText('exit(0)');
+  await expect(page.locator('#trace-stats')).toContainText('first 400');
+  await expect(page.locator('#flow-stats')).toContainText('transfers');
+  const hot = page.locator('#flow-list .flow-row').filter({ hasText: 'back edge' });
+  await expect(hot).toContainText('499×');
+  await hot.click();
+  await expect(page.locator('#flow-detail')).toContainText('499 traversals');
+  await page.locator('#flow-filter').selectOption('all');
+  expect(await page.locator('#flow-list .flow-row').count()).toBeGreaterThan(2);
+  const evidencePromise = page.waitForEvent('download');
+  await page.locator('#trace-download').click();
+  const evidence = await evidencePromise;
+  const report = JSON.parse(await readFile(await evidence.path(), 'utf8')) as {
+    flow: { truncated: boolean; nodes: unknown[]; edges: { hits: number; lastStep: number }[] };
+  };
+  expect(report.flow.truncated).toBe(false);
+  expect(report.flow.nodes.length).toBeGreaterThan(2);
+  expect(report.flow.edges.some((edge) => edge.hits === 499 && edge.lastStep > 400)).toBe(true);
+});
+
 test('shows decoder writes and exports the reconstructed runtime stage', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium', 'mutation atlas browser regression runs once on desktop Chromium');
   await openWorkbench(page);
@@ -168,6 +196,10 @@ test('shows mapped-code provenance and downloads its first-execution snapshot', 
   await page.locator('#asm-editor-host textarea').fill(source);
   await page.locator('#btn-run-emu').click();
   await expect(page.locator('#emu-msg')).toContainText('exit(0)');
+  const stageHop = page.locator('#flow-list .flow-row').filter({ hasText: 'stage hop' });
+  await expect(stageHop).toHaveCount(1);
+  await stageHop.click();
+  await expect(page.locator('#flow-detail')).toContainText('30000000');
   const mapped = page.locator('#stage-list .stage-row').filter({ hasText: 'mapped' });
   await expect(mapped).toHaveCount(1);
   await mapped.click();

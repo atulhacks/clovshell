@@ -63,6 +63,11 @@ describe('runEmulation', () => {
     const result = await runEmulation('arm', Uint8Array.from([...arm, ...thumb]));
     expect(result.exit, result.error ?? '').toBe('exit(0)');
     expect(result.trace.map((step) => step.mode)).toEqual(['arm', 'arm', 'arm', 'thumb', 'thumb', 'thumb']);
+    expect(result.flow.edges.some((edge) => {
+      const from = result.flow.nodes[edge.fromId]!;
+      const to = result.flow.nodes[edge.toId]!;
+      return from.mode === 'arm' && to.mode === 'thumb';
+    })).toBe(true);
   });
 
   it('follows a Thumb bx into A32 and preserves instruction mode', async () => {
@@ -111,6 +116,10 @@ describe('runEmulation', () => {
       expect(stage!.permissions! & 4).toBe(4);
       expect(result.mapEvents.map((event) => event.operation)).toEqual(['mmap', 'mprotect']);
       expect(result.stagesTruncated).toBe(false);
+      const mappedNode = result.flow.nodes.find((node) => node.addr === stage!.entryAddr && node.stageId === stage!.id);
+      expect(mappedNode).toBeDefined();
+      expect(result.flow.edges.some((edge) => edge.toId === mappedNode!.id
+        && result.flow.nodes[edge.fromId]?.stageId !== stage!.id)).toBe(true);
     },
   );
 
@@ -127,6 +136,24 @@ describe('runEmulation', () => {
     expect(stage.snapshot.slice(0, payload.length)).toEqual(payload);
     expect(stage.executionContext[0]?.step).toBe(stage.firstExecutionStep - 6);
     expect(stage.executionContext.some((step) => step.step === stage.firstExecutionStep + 1)).toBe(true);
+  });
+
+  it('keeps exact loop edge counts after the 400-instruction trace cap', async () => {
+    const source = [
+      'mov ecx, 500', 'loop_start:', 'dec ecx', 'jne loop_start',
+      'xor edi, edi', 'mov eax, 60', 'syscall',
+    ].join('\n');
+    const result = await runEmulation('x86-64', assemble('x86-64', source).bytes!);
+    expect(result.exit).toBe('exit(0)');
+    expect(result.traceTruncated).toBe(true);
+    const loopEdge = result.flow.edges.find((edge) => {
+      const from = result.flow.nodes[edge.fromId]!;
+      const to = result.flow.nodes[edge.toId]!;
+      return to.addr < from.addr;
+    });
+    expect(loopEdge).toMatchObject({ hits: 499 });
+    expect(loopEdge!.lastStep).toBeGreaterThan(400);
+    expect(result.flow.truncated).toBe(false);
   });
 
   it('keeps the exact writer and execution windows after the main trace cap', async () => {

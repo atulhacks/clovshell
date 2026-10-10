@@ -222,6 +222,23 @@
             <div class="emu-regs trace-registers" id="trace-registers"></div>
           </div>
         </div>
+        <div class="flow-panel" id="flow-panel">
+          <div class="mutation-head">
+            <div>
+              <h3 class="emu-sub">execution flow <span class="dim">— observed branches, loops and stage hops</span></h3>
+              <span class="stats" id="flow-stats"></span>
+            </div>
+            <select id="flow-filter" aria-label="Filter execution flow edges">
+              <option value="transfers">transfers</option>
+              <option value="stage">stage / mode hops</option>
+              <option value="all">all edges</option>
+            </select>
+          </div>
+          <div class="mutation-grid">
+            <div class="mutation-list" id="flow-list" aria-label="Observed execution edges"></div>
+            <div class="mutation-detail" id="flow-detail"></div>
+          </div>
+        </div>
         <div class="mutation-panel" id="mutation-panel">
           <div class="mutation-head">
             <h3 class="emu-sub">code mutation atlas <span class="dim">— original → written → executed</span></h3>

@@ -1251,6 +1251,30 @@ body.dragging::after {
 .trace-selected .trace-bytes { color: var(--fg-dim); }
 .trace-registers { max-height: 310px; }
 
+.flow-panel { border-top: 1px solid var(--border); }
+.flow-panel .mutation-head { align-items: center; }
+.flow-panel .mutation-head .stats { display: block; margin-top: 3px; }
+.flow-panel select { max-width: 150px; }
+.flow-row {
+  display: grid;
+  grid-template-columns: 5ch minmax(18ch, 1fr) minmax(9ch, .7fr);
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font: 11px var(--mono);
+  cursor: pointer;
+}
+.flow-row:hover, .flow-row:focus-visible { background: var(--bg-hover); }
+.flow-row.active { background: var(--accent-soft); box-shadow: inset 2px 0 var(--accent); }
+.flow-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-row .flow-count, .flow-row .trace-address { color: var(--accent); }
+.flow-kind { color: var(--fg-dim); }
+
 .mutation-panel { border-top: 1px solid var(--border); }
 .mutation-head {
   display: flex;
@@ -1395,6 +1419,8 @@ button.stage-context-row:hover, button.stage-context-row:focus-visible { backgro
   .stage-diff-row .dim { display: none; }
   .stage-context-row { grid-template-columns: 5ch 9ch minmax(0, 1fr); }
   .stage-context-row .trace-bytes { display: none; }
+  .flow-row { grid-template-columns: 5ch minmax(0, 1fr); }
+  .flow-row .flow-kind { display: none; }
 }
 
 /* ------------------------------------------------------------------ emulation */

@@ -57,6 +57,12 @@ and Capstone WASM files into `public/wasm/` through `postinstall`.
 - Follow A32↔Thumb `bx`/`blx` interworking. Each fetched instruction and stage records its actual
   execution mode so mixed-mode traces and stage disassembly stay accurate; the ARM register view
   includes `cpsr`. Mixed-mode input can be loaded as raw bytes.
+- Explore an observed **execution-flow graph** across the full run, not just the first 400 trace
+  steps. It aggregates instruction and edge hit counts, identifies branches, back edges, ISA-mode
+  switches and stage hops, and links the first traversal back to the trace or captured stage.
+  Filter transfers or inspect every edge; the complete bounded graph is included in JSON export.
+  Nodes are distinct by address, instruction bytes, mode and stage, so re-executed rewritten code
+  is not conflated with its earlier version. Capture is capped at 4,096 nodes and 8,192 edges.
 - Inspect the **Code Mutation Atlas** for writes to the loaded code image: original bytes, pre/post
   write bytes, the writing instruction, and the first observed execution of changed bytes. Download
   the final code-image snapshot as `.bin` or the trace and mutation evidence as JSON. Image mutations
