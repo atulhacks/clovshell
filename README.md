@@ -107,6 +107,9 @@ and Capstone WASM files into `public/wasm/` through `postinstall`.
   among Trace, Flow, Scenarios, Mutations, Stages, Tools, and Reference tabs, and reset the layout
   from the left rail. A narrow or zoomed desktop window retains the Laboratory with an evidence
   toggle and collapsible inspector. The editor supports Escape to return focus to its header.
+- Reopen up to 12 captured runs from the inspector. Each keeps its original architecture, source
+  revision, argument/fixture, and evidence; older runs are marked historic after an edit. Trace,
+  flow, mutation, and stage selections remain linked and restore when switching runs.
 - Install the production build as a PWA. Once its assets have been precached, it works offline,
   including the lazy-loaded emulator engines.
 

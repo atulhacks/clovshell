@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 const portable = (name: string): boolean => name.startsWith('mobile-') || name.startsWith('tablet-');
 
@@ -118,4 +119,45 @@ test('a desktop run can be cancelled during assembly', async ({ page }, testInfo
   await expect(page.locator('#emu-msg')).toContainText('run cancelled');
   await expect(page.locator('#lab-run-state')).toContainText('CANCELLED');
   await expect(page.locator('#lab-cancel-run')).toBeHidden();
+});
+
+test('run history restores original architecture, evidence, and selection', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'run-history browser regression runs once');
+  await page.goto('/');
+  await expect(page.locator('#btn-assemble')).toBeEnabled();
+  const editor = page.locator('#asm-editor-host textarea');
+  await editor.fill('nop\nret');
+  await page.locator('#lab-run').click();
+  await expect(page.locator('#lab-run-history-list .lab-run-row')).toHaveCount(1);
+  await expect(page.locator('#lab-run-state')).toContainText('R1 / X86-64 / CURRENT');
+  await page.locator('#trace-list .trace-row').nth(1).click();
+  await expect(page.locator('#lab-selection')).toHaveText('TRACE #2');
+
+  await page.locator('#arch-select').selectOption('arm64');
+  await expect(page.locator('#lab-run-state')).toContainText('R1 / X86-64 / HISTORIC');
+  await editor.fill('mov x0, #1\nret');
+  await page.locator('#lab-run').click();
+  await expect(page.locator('#lab-run-history-list .lab-run-row')).toHaveCount(2);
+  await expect(page.locator('#lab-run-state')).toContainText('R2 / ARM64 / CURRENT');
+
+  await page.locator('#lab-run-history-list [data-run-id="R1"]').click();
+  await expect(page.locator('#lab-run-state')).toContainText('R1 / X86-64 / HISTORIC');
+  await expect(page.locator('#lab-selection')).toHaveText('TRACE #2');
+  await expect(page.locator('#trace-list .trace-row').nth(1)).toHaveAttribute('aria-current', 'step');
+  const download = page.waitForEvent('download');
+  await page.locator('#trace-download').click();
+  const report = JSON.parse(await readFile(await (await download).path(), 'utf8')) as { architecture: string };
+  expect(report.architecture).toBe('x86-64');
+
+  await page.locator('#lab-tab-flow').click();
+  await page.locator('#flow-filter').selectOption('all');
+  await page.locator('#flow-list .flow-row').first().click();
+  await expect(page.locator('#lab-selection')).toHaveText('FLOW #1');
+  await expect(page.locator('#trace-list .trace-row.linked')).not.toHaveCount(0);
+  await page.locator('#lab-run-history-list [data-run-id="R2"]').click();
+  await page.locator('#lab-run-history-list [data-run-id="R1"]').click();
+  await expect(page.locator('#lab-selection')).toHaveText('FLOW #1');
+  await page.locator('#lab-clear-history').click();
+  await expect(page.locator('#lab-run-state')).toHaveText('NO RUN');
+  await expect(page.locator('#lab-run-history-list .lab-run-row')).toHaveCount(0);
 });

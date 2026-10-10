@@ -173,6 +173,7 @@ test('path divergence lab replays scenarios and opens their individual traces', 
   await page.locator('#scenario-args').fill('0, 1, 2');
   await page.locator('#btn-explore').click();
   await expect(page.locator('#scenario-results .scenario-row')).toHaveCount(3);
+  await expect(page.locator('#lab-run-history-list .lab-run-row')).toHaveCount(3);
   await expect(page.locator('#scenario-stats')).toContainText('3 / 3 runs');
   const rows = page.locator('#scenario-results .scenario-row');
   await expect(rows.nth(1)).toContainText('first difference #3');
@@ -183,6 +184,8 @@ test('path divergence lab replays scenarios and opens their individual traces', 
   await expect(page.locator('#emu-msg')).toContainText('exit(0)');
   await page.locator('#scenario-input').fill('41');
   await expect(page.locator('#scenario-results .scenario-row')).toHaveCount(0);
+  await expect(page.locator('#lab-run-history-list .lab-run-row')).toHaveCount(3);
+  await expect(page.locator('#lab-run-state')).toContainText('HISTORIC');
 });
 
 test('input fixture supplies read bytes in a normal browser emulation', async ({ page }, testInfo) => {

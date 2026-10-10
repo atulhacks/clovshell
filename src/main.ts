@@ -37,6 +37,8 @@ import { gadgetRows } from './gadgets';
 import type { Gadget } from './gadgets';
 import { createSyscallPanel, syscallScaffold } from './syscalls';
 import { PRESETS } from './presets';
+import { RunSessionStore } from './run-session';
+import type { EvidenceSelection, RunDocument, RunRecord } from './run-session';
 import { initTheme } from './themes';
 import { bootDone, bootFail, bootStage, initBoot } from './boot';
 import {
@@ -539,6 +541,121 @@ let mutationRows: HTMLButtonElement[] = [];
 let selectedMutation = 0;
 let stageRows: HTMLButtonElement[] = [];
 let selectedStage = 0;
+const runSession = new RunSessionStore();
+let documentRevision = 0;
+let renderingRun = false;
+const runHistory = $('#lab-run-history-list');
+const runHistoryClear = $<HTMLButtonElement>('#lab-clear-history');
+
+function updateRunStatus(): void {
+  const run = runSession.active();
+  const status = $('#lab-run-state');
+  const selection = $('#lab-selection');
+  if (!run) {
+    status.textContent = 'NO RUN';
+    selection.textContent = 'NO SELECTION';
+    return;
+  }
+  const historic = run.document.revision !== documentRevision;
+  status.textContent = `${run.id} / ${run.document.arch.toUpperCase()} / ${historic ? 'HISTORIC' : 'CURRENT'}`;
+  const chosen = runSession.selection();
+  selection.textContent = !chosen ? 'NO SELECTION'
+    : chosen.kind === 'context' ? `CONTEXT S${chosen.stageId} #${chosen.step}`
+      : `${chosen.kind.toUpperCase()} #${chosen.index + 1}`;
+}
+
+function renderRunHistory(): void {
+  runHistory.replaceChildren();
+  const active = runSession.active();
+  for (const run of runSession.list()) {
+    const historic = run.document.revision !== documentRevision;
+    const row = el('button', { class: `lab-run-row${active?.id === run.id ? ' active' : ''}`,
+      type: 'button', 'data-run-id': run.id,
+      'aria-current': active?.id === run.id ? 'true' : 'false',
+      'aria-label': `${run.id}, ${run.document.arch}, ${run.document.label}, ${run.result.steps} steps, ${historic ? 'historic' : 'current'}` },
+      el('span', { class: 'lab-run-id' }, run.id),
+      el('span', { class: 'lab-run-arch' }, run.document.arch.toUpperCase()),
+      el('span', { class: 'lab-run-badge' }, historic ? 'HISTORIC' : 'CURRENT'),
+      el('span', { class: 'lab-run-summary' }, `${run.document.label} · ${run.result.steps} steps · ${run.result.exit}`));
+    row.addEventListener('click', () => selectRunRecord(run.id));
+    runHistory.append(row);
+  }
+  if (!runSession.list().length) runHistory.append(el('div', { class: 'listing-empty' }, 'No captured runs yet.'));
+  runHistoryClear.disabled = runSession.list().length === 0;
+  updateRunStatus();
+}
+
+function sourceChanged(): void {
+  documentRevision++;
+  renderRunHistory();
+}
+
+function setEditorSource(source: string): void {
+  runAbort?.abort();
+  clearScenarioResults();
+  cancelAssembly();
+  editor.setValue(source);
+  sourceChanged();
+}
+
+function selectionChanged(selection: EvidenceSelection): void {
+  if (renderingRun || !runSession.selectEvidence(selection)) return;
+  updateRunStatus();
+  highlightLinkedEvidence();
+}
+
+function highlightLinkedEvidence(): void {
+  for (const row of [...traceRows, ...flowRows, ...mutationRows, ...stageRows]) row.classList.remove('linked');
+  const result = activeTrace;
+  const selection = runSession.selection();
+  if (!result || !selection) return;
+  const linkTrace = (step: number | null): void => {
+    if (step !== null && step >= 1) traceRows[step - 1]?.classList.add('linked');
+  };
+  if (selection.kind === 'trace') {
+    const step = selection.index + 1;
+    result.mutations.forEach((item, index) => {
+      if (item.writerStep === step || item.firstExecutionStep === step) mutationRows[index]?.classList.add('linked');
+    });
+    result.stages.forEach((item, index) => {
+      if (item.writerStep === step || item.firstExecutionStep === step) stageRows[index]?.classList.add('linked');
+    });
+    flowEdgesShown.forEach((edge, index) => {
+      if (edge.firstStep === step || edge.firstStep - 1 === step) flowRows[index]?.classList.add('linked');
+    });
+  } else if (selection.kind === 'flow') {
+    const edge = result.flow.edges[selection.index];
+    if (!edge) return;
+    const shownIndex = flowEdgesShown.indexOf(edge);
+    if (shownIndex >= 0) flowRows[shownIndex]?.classList.add('linked');
+    linkTrace(edge.firstStep - 1);
+    linkTrace(edge.firstStep);
+    const from = result.flow.nodes[edge.fromId], to = result.flow.nodes[edge.toId];
+    for (const stageId of [from?.stageId, to?.stageId]) {
+      if (stageId != null) stageRows[stageId]?.classList.add('linked');
+    }
+  } else if (selection.kind === 'mutation') {
+    const mutation = result.mutations[selection.index];
+    if (!mutation) return;
+    linkTrace(mutation.writerStep);
+    linkTrace(mutation.firstExecutionStep);
+    result.stages.forEach((stage, index) => {
+      if (mutation.addr >= stage.pageBase && mutation.addr < stage.pageBase + stage.snapshot.length) stageRows[index]?.classList.add('linked');
+    });
+  } else if (selection.kind === 'stage') {
+    const stage = result.stages[selection.index];
+    if (!stage) return;
+    linkTrace(stage.writerStep);
+    linkTrace(stage.firstExecutionStep);
+    flowEdgesShown.forEach((edge, index) => {
+      const from = result.flow.nodes[edge.fromId], to = result.flow.nodes[edge.toId];
+      if (from?.stageId === stage.id || to?.stageId === stage.id) flowRows[index]?.classList.add('linked');
+    });
+  } else if (selection.kind === 'context') {
+    stageRows[selection.stageId]?.classList.add('linked');
+    linkTrace(selection.step);
+  }
+}
 
 function imageSlice(image: Uint8Array | null, base: number, address: number, size: number): Uint8Array | null {
   const offset = address - base;
@@ -585,6 +702,7 @@ function selectMutation(index: number, focus = false): void {
       : mutationField('first execution', first == null ? 'not observed' : `instruction #${first} (beyond trace cap)`),
     el('div', { class: 'mutation-jumps' }, jump('writer', mutation.writerStep), jump('execution', first)),
   );
+  selectionChanged({ kind: 'mutation', index });
 }
 
 function renderMutations(result: EmuResult | null): void {
@@ -657,6 +775,7 @@ function showContextStep(step: EmuContextStep, context: EmuContextStep[], row: H
           el('span', { class: 'emu-reg-val' }, step.registers[index] ?? '—')))),
   );
   if (jump && activeTrace && step.step <= activeTrace.trace.length) selectTraceStep(step.step - 1);
+  if (jump) selectionChanged({ kind: 'context', stageId: activeTrace?.stages[selectedStage]?.id ?? selectedStage, step: step.step });
 }
 
 function renderContextRows(target: HTMLElement, context: EmuContextStep[], activeStep: number | null): void {
@@ -780,6 +899,7 @@ function selectStage(index: number, focus = false): void {
   );
   stageSnapshotDownload.disabled = stage.snapshot.length === 0;
   renderStageExplorer(stage);
+  selectionChanged({ kind: 'stage', index });
 }
 
 function renderStages(result: EmuResult | null): void {
@@ -861,6 +981,7 @@ function selectTraceStep(index: number, focus = false): void {
         el('span', { class: 'emu-reg-val' }, value)),
     );
   }
+  selectionChanged({ kind: 'trace', index });
 }
 
 function flowInstruction(node: FlowNode): string {
@@ -903,6 +1024,7 @@ function selectFlow(index: number, focus = false): void {
       jump('source', edge.firstStep - 1), jump('destination', edge.firstStep),
       ...[stageJump(from.stageId), stageJump(to.stageId)].filter((item): item is HTMLElement => item !== null)),
   );
+  selectionChanged({ kind: 'flow', index: activeTrace.flow.edges.indexOf(edge) });
 }
 
 function renderFlow(result: EmuResult | null): void {
@@ -952,10 +1074,23 @@ function renderFlow(result: EmuResult | null): void {
   selectFlow(0);
 }
 
-flowFilter.addEventListener('change', () => renderFlow(activeTrace));
+flowFilter.addEventListener('change', () => {
+  renderingRun = true;
+  renderFlow(activeTrace);
+  renderingRun = false;
+  const selection = runSession.selection();
+  if (selection?.kind === 'flow') {
+    const edge = activeTrace?.flow.edges[selection.index];
+    const shownIndex = edge ? flowEdgesShown.indexOf(edge) : -1;
+    if (shownIndex >= 0) selectFlow(shownIndex);
+    else if (flowEdgesShown.length) selectFlow(0);
+  }
+  highlightLinkedEvidence();
+});
 
-function renderTrace(result: EmuResult | null): void {
+function renderTrace(result: EmuResult | null, resultArch = archId): void {
   activeTrace = result;
+  traceArch = resultArch;
   tracePanel.classList.toggle('hidden', !result || result.trace.length === 0);
   traceList.replaceChildren();
   traceRegisters.replaceChildren();
@@ -969,7 +1104,6 @@ function renderTrace(result: EmuResult | null): void {
     return;
   }
 
-  traceArch = archId;
   traceStats.textContent = result.traceTruncated
     ? `first ${result.trace.length} of ${result.steps} instructions captured`
     : `${result.trace.length} instructions captured`;
@@ -1101,10 +1235,10 @@ stageSnapshotDownload.addEventListener('click', () => {
   }
 });
 
-function renderEmu(result: EmuResult | null): void {
-  renderTrace(result);
+function renderEmu(result: EmuResult | null, resultArch = archId): void {
+  renderTrace(result, resultArch);
   setLabEvidenceReady(result !== null);
-  $('#lab-run-state').textContent = result ? `${result.steps} STEPS / ${archId.toUpperCase()}` : 'NO RUN';
+  updateRunStatus();
   if (!result) {
     emuLog.replaceChildren(el('div', { class: 'listing-empty' }, EMU_PLACEHOLDER));
     emuRegs.replaceChildren();
@@ -1136,8 +1270,58 @@ function renderEmu(result: EmuResult | null): void {
   setMsg(emuMsg, `${result.steps} steps · ${result.exit}`, kind);
 }
 
+function selectRunRecord(id: string): void {
+  const run = runSession.selectRun(id);
+  if (!run) return;
+  renderingRun = true;
+  renderEmu(run.result, run.document.arch);
+  renderingRun = false;
+  const selection = runSession.selection();
+  if (selection?.kind === 'trace') selectTraceStep(selection.index);
+  else if (selection?.kind === 'flow') {
+    const edge = run.result.flow.edges[selection.index];
+    const shownIndex = edge ? flowEdgesShown.indexOf(edge) : -1;
+    if (shownIndex >= 0) selectFlow(shownIndex);
+    else if (flowEdgesShown.length) selectFlow(0);
+  }
+  else if (selection?.kind === 'mutation') selectMutation(selection.index);
+  else if (selection?.kind === 'stage') selectStage(selection.index);
+  else if (selection?.kind === 'context') {
+    selectStage(selection.stageId);
+    const row = [...stageWriterContext.querySelectorAll<HTMLElement>('[data-step]'),
+      ...stageExecutionContext.querySelectorAll<HTMLElement>('[data-step]')]
+      .find((item) => Number(item.dataset.step) === selection.step);
+    row?.click();
+  } else if (run.result.trace.length) selectTraceStep(0);
+  else if (flowEdgesShown.length) selectFlow(0);
+  else if (run.result.stages.length) selectStage(0);
+  else if (run.result.mutations.length) selectMutation(0);
+  renderRunHistory();
+  highlightLinkedEvidence();
+}
+
+function captureRun(document: RunDocument, result: EmuResult, select = true): RunRecord {
+  const run = runSession.record(document, result);
+  if (select) selectRunRecord(run.id);
+  else renderRunHistory();
+  return run;
+}
+
+runHistoryClear.addEventListener('click', () => {
+  suppressedCancel = runAbort;
+  runAbort?.abort();
+  clearScenarioResults();
+  runSession.clear();
+  renderingRun = true;
+  renderEmu(null);
+  renderingRun = false;
+  renderRunHistory();
+});
+renderRunHistory();
+
 let emuBusy = false;
 let runAbort: AbortController | null = null;
+let suppressedCancel: AbortController | null = null;
 
 function runEmulationInWorker(arch: string, bytes: Uint8Array, entryArg: bigint | null, inputBytes: Uint8Array, signal: AbortSignal): Promise<EmuResult> {
   return new Promise((resolve, reject) => {
@@ -1174,6 +1358,9 @@ async function runEmu(): Promise<void> {
   clearScenarioResults();
   const src = editor.getValue().trim();
   const runArch = archId;
+  const runRevision = documentRevision;
+  const runArg = emuArgInput.value;
+  const runFixture = scenarioInput.value;
   if (!src) {
     toast('nothing to run — the editor is empty');
     return;
@@ -1193,7 +1380,7 @@ async function runEmu(): Promise<void> {
   setMsg(emuMsg, 'assembling…', '');
   try {
     const { result: res } = await assembleInWorker(runArch, src, controller.signal);
-    if (archId !== runArch || editor.getValue().trim() !== src) return;
+    if (documentRevision !== runRevision || archId !== runArch || editor.getValue().trim() !== src) return;
     if (!res.ok || !res.bytes) {
       toast('fix the assembly errors first');
       return;
@@ -1210,26 +1397,30 @@ async function runEmu(): Promise<void> {
     const inputBytes = parseInputFixture();
     setMsg(emuMsg, 'loading unicorn engine (first run downloads ~1 MB)…', '');
     const result = await runEmulationInWorker(runArch, res.bytes, arg ? arg.value : null, inputBytes, controller.signal);
-    if (archId === runArch && editor.getValue().trim() === src) {
+    if (documentRevision === runRevision && archId === runArch && editor.getValue().trim() === src) {
       setChip(chipUnicorn, 'ok');
-      renderEmu(result);
+      captureRun({ revision: runRevision, arch: runArch, source: src, entryArg: runArg,
+        scenarioArgs: '', fixture: runFixture, kind: 'direct', label: runArg.trim() ? `arg ${runArg.trim()}` : 'direct run' }, result);
       activateLabTab('trace');
     }
   } catch (err) {
-    if (controller.signal.aborted && archId === runArch && editor.getValue().trim() === src) {
+    if (controller.signal.aborted && suppressedCancel === controller) {
+      // Clearing evidence owns the visible status; the cancelled job must not repaint it.
+    } else if (controller.signal.aborted && documentRevision === runRevision && archId === runArch && editor.getValue().trim() === src) {
       $('#lab-run-state').textContent = 'CANCELLED';
       setMsg(emuMsg, 'run cancelled', 'warn');
-    } else if (archId === runArch && editor.getValue().trim() === src) {
+    } else if (documentRevision === runRevision && archId === runArch && editor.getValue().trim() === src) {
       setMsg(emuMsg, `✗ ${err instanceof Error ? err.message : String(err)}`, 'err');
     }
   } finally {
     if (runAbort === controller) runAbort = null;
+    if (suppressedCancel === controller) suppressedCancel = null;
     $('#lab-cancel-run').classList.add('hidden');
     emuBusy = false;
     btnRunEmu.disabled = false;
     btnExplore.disabled = false;
     btnRunEmu.textContent = '▶ run';
-    if ($('#lab-run-state').textContent === 'RUNNING…') $('#lab-run-state').textContent = 'NO RUN';
+    if ($('#lab-run-state').textContent === 'RUNNING…') updateRunStatus();
   }
 }
 
@@ -1252,6 +1443,9 @@ async function explorePaths(): Promise<void> {
   if (emuBusy) return;
   const src = editor.getValue().trim();
   const runArch = archId;
+  const runRevision = documentRevision;
+  const runFixture = scenarioInput.value;
+  const runScenarioArgs = scenarioArgs.value;
   if (!src || src.length > MAX_ASM_CHARS) {
     scenarioStats.textContent = !src ? 'enter assembly source first' : 'assembly source exceeds the limit';
     return;
@@ -1274,7 +1468,7 @@ async function explorePaths(): Promise<void> {
   scenarioStats.textContent = 'assembling…';
   try {
     const { result: assembled } = await assembleInWorker(runArch, src);
-    if (generation !== scenarioGeneration || runArch !== archId || editor.getValue().trim() !== src) return;
+    if (generation !== scenarioGeneration || runRevision !== documentRevision || runArch !== archId || editor.getValue().trim() !== src) return;
     if (!assembled.ok || !assembled.bytes?.length) throw new Error(assembled.error || 'assembly produced no bytes');
     const bytes = assembled.bytes;
     const seen = new Set<string>();
@@ -1300,7 +1494,7 @@ async function explorePaths(): Promise<void> {
       scenarioAbort = () => { cancelled = true; finish(); };
       worker.onerror = (event) => finish(new Error(event.message || 'scenario worker failed'));
       worker.onmessage = (event: MessageEvent<{ index?: number; result?: EmuResult; error?: string; done?: true }>) => {
-        if (generation !== scenarioGeneration) { finish(); return; }
+        if (generation !== scenarioGeneration || runRevision !== documentRevision) { finish(); return; }
         const message = event.data;
         if (message.done) { finish(); return; }
         completed++;
@@ -1330,6 +1524,9 @@ async function explorePaths(): Promise<void> {
             el('span', { class: 'scenario-diff' }, divergence),
             el('span', { class: 'scenario-exit' }, result.exit),
           );
+          const run = captureRun({ revision: runRevision, arch: runArch, source: src,
+            entryArg: label === 'fixture' ? '' : label, scenarioArgs: runScenarioArgs, fixture: runFixture,
+            kind: 'scenario', label: `scenario ${label}` }, result, false);
           row.addEventListener('click', () => {
             for (const other of scenarioRows) {
               other.classList.remove('active');
@@ -1337,7 +1534,7 @@ async function explorePaths(): Promise<void> {
             }
             row.classList.add('active');
             row.setAttribute('aria-current', 'true');
-            renderEmu(result);
+            selectRunRecord(run.id);
           });
           scenarioRows.push(row);
           scenarioResults.append(row);
@@ -1368,16 +1565,21 @@ btnExplore.addEventListener('click', () => void explorePaths());
 btnCancelScenarios.addEventListener('click', () => {
   scenarioAbort?.();
 });
-scenarioArgs.addEventListener('input', () => { clearScenarioResults(); saveState(); });
+scenarioArgs.addEventListener('input', () => { runAbort?.abort(); clearScenarioResults(); sourceChanged(); saveState(); });
 scenarioInput.addEventListener('input', () => {
+  runAbort?.abort();
   clearScenarioResults();
-  renderEmu(null);
+  sourceChanged();
   saveState();
 });
-emuArgInput.addEventListener('input', saveState);
+emuArgInput.addEventListener('input', () => { runAbort?.abort(); sourceChanged(); saveState(); });
 $('#btn-clear-emu').addEventListener('click', () => {
+  suppressedCancel = runAbort;
+  runAbort?.abort();
   clearScenarioResults();
+  runSession.clearSelection();
   renderEmu(null);
+  renderRunHistory();
   saveState();
 });
 
@@ -1516,7 +1718,7 @@ $('#btn-encode-load').addEventListener('click', () => {
     toast('encode something first');
     return;
   }
-  editor.setValue(encodedSource);
+  setEditorSource(encodedSource);
   runAssemble();
   saveState();
   void runEmu();
@@ -1657,7 +1859,7 @@ function readDroppedFile(file: File): void {
       return;
     }
     void file.text().then((src) => {
-      editor.setValue(src);
+      setEditorSource(src);
       runAssemble();
       saveState();
       toast(`${file.name} → loaded into the editor`);
@@ -1751,7 +1953,7 @@ function renderPresets(): void {
     const btn = el('button', { class: 'btn ghost preset-btn', type: 'button', title: p.note }, p.label);
     btn.append(el('span', { class: 'preset-note' }, p.note));
     btn.addEventListener('click', () => {
-      editor.setValue(p.src);
+      setEditorSource(p.src);
       runAssemble();
       saveState();
       void runEmu();
@@ -1785,7 +1987,7 @@ editor.onChange(() => {
   renderShellcode(null, 0);
   setMsg(asmMsg, 'source changed — assembling…', '');
   saveState();
-  renderEmu(null);
+  sourceChanged();
   invalidateDerivedViews();
   if (autoAssembleTimer !== null) clearTimeout(autoAssembleTimer);
   autoAssembleTimer = setTimeout(() => {
@@ -1805,9 +2007,8 @@ btnAssemble.addEventListener('click', runAssemble);
 btnDisassemble.addEventListener('click', runDisassemble);
 
 $('#btn-clear-asm').addEventListener('click', () => {
-  editor.setValue('');
+  setEditorSource('');
   runAssemble();
-  renderEmu(null);
   saveState();
 });
 
@@ -1846,13 +2047,14 @@ archSelect.addEventListener('change', () => {
   renderShellcode(null, 0);
   setMsg(asmMsg, 'architecture changed — assembling…', '');
   archId = archSelect.value;
+  sourceChanged();
   invalidateDerivedViews();
   editor.setArch(getArch(archId));
   saveState();
   updateEmuArgUi();
   ($('#syscall-list') as HTMLElement & { __setArch?: (id: string) => void }).__setArch?.(archId);
   renderPresets();
-  renderEmu(null); // stale register dump would be misleading after an arch switch
+  // Captured runs stay inspectable; their architecture and source revision remain attached.
   if (enginesReady()) {
     runAssemble();
     runDisassemble();

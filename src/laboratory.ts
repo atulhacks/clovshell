@@ -157,14 +157,14 @@ export function mountLaboratory(): void {
         <div class="lab-source lab-pane" id="lab-source" aria-label="Source editor"><div class="lab-pane-label"><span>01 / SOURCE</span><span class="dim">ASSEMBLY INPUT</span></div></div>
         <div class="lab-splitter lab-splitter-vertical" id="lab-source-splitter" role="separator" tabindex="0" aria-label="Resize source and evidence panes" aria-controls="lab-source" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="900"></div>
         <div class="lab-evidence lab-pane" id="lab-evidence" aria-label="Bytes and disassembly"><div class="lab-pane-label"><span>02 / EVIDENCE</span><span class="dim">BYTES → INSTRUCTIONS</span></div></div>
-        <aside class="lab-inspector lab-pane" id="lab-inspector" aria-label="Execution inspector"><div class="lab-pane-label"><span>03 / INSPECTOR</span><span class="dim">RUNTIME STATE</span></div></aside>
+        <aside class="lab-inspector lab-pane" id="lab-inspector" aria-label="Execution inspector"><div class="lab-pane-label"><span>03 / INSPECTOR</span><span class="dim">RUNTIME STATE</span></div><section class="lab-run-history" aria-label="Run history"><div class="lab-run-history-head"><span>RUN HISTORY</span><button class="btn ghost" id="lab-clear-history" type="button">Clear history</button></div><div id="lab-run-history-list" class="lab-run-history-list"></div></section></aside>
       </div>
       <div class="lab-splitter lab-splitter-horizontal" id="lab-dock-splitter" role="separator" tabindex="0" aria-label="Resize analysis dock" aria-controls="lab-dock" aria-orientation="horizontal" aria-valuemin="180" aria-valuemax="800"></div>
       <section class="lab-dock" id="lab-dock" aria-label="Analysis dock">
         <div class="lab-dock-bar"><div class="lab-tablist" role="tablist" aria-label="Analysis views"></div><span class="lab-dock-caption">OBSERVED EVIDENCE / LOCAL SESSION</span></div>
         <div class="lab-dock-content"></div>
       </section>
-      <div class="lab-status" role="status"><span class="lab-status-mark">✣</span><span>LABORATORY / LOCAL</span><span id="lab-active-view">VIEW / TRACE</span><span id="lab-run-state">NO RUN</span><span class="lab-status-right">KEYBOARD: CTRL/CMD + ENTER · ESC EXITS EDITOR</span></div>
+      <div class="lab-status" role="status"><span class="lab-status-mark">✣</span><span>LABORATORY / LOCAL</span><span id="lab-active-view">VIEW / TRACE</span><span id="lab-run-state">NO RUN</span><span id="lab-selection">NO SELECTION</span><span class="lab-status-right">KEYBOARD: CTRL/CMD + ENTER · ESC EXITS EDITOR</span></div>
     </div>`;
   shell = query<HTMLElement>('#lab-shell');
   query('#lab-brand-slot').append(masthead);
