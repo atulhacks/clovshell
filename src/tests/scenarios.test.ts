@@ -1,11 +1,16 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { assemble, initEngines } from '../engines';
 import { runEmulation } from '../emu';
+import type { EmuResult } from '../emu';
 import { compareScenario, flowKeys, parseScenarioArgs } from '../scenarios';
 
 beforeAll(async () => { await initEngines(); });
 
 describe('scenario inputs', () => {
+  it('reuses immutable flow fingerprints for repeat comparisons', () => {
+    const result = { flow: { nodes: [], edges: [], path: [] }, stages: [] } as unknown as EmuResult;
+    expect(flowKeys(result)).toBe(flowKeys(result));
+  });
   it('parses and bounds entry values by architecture', () => {
     expect(parseScenarioArgs('0, 0x1, -1', 'arm')).toEqual([0n, 1n, 0xffffffffn]);
     expect(parseScenarioArgs('0, -1', 'x86-64')).toEqual([0n, 0xffffffffffffffffn]);

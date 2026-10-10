@@ -76,6 +76,7 @@ export function activateLabTab(id: DockTab, focus = false): void {
   query<HTMLElement>('#lab-active-view').textContent = `VIEW / ${id.toUpperCase()}`;
   saveLayout();
   document.dispatchEvent(new Event('lab:layout'));
+  document.dispatchEvent(new CustomEvent('lab:tab', { detail: id }));
 }
 
 function configureSplitter(id: string, axis: 'x' | 'y'): void {

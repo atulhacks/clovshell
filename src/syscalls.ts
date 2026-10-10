@@ -4,7 +4,6 @@
 
 import type { SyscallEntry } from './syscalls-data';
 import { x8664, x8632, arm as armTable, arm64 as arm64Table } from './syscalls-data';
-import { getArch } from './engines';
 
 export function tableFor(archId: string): SyscallEntry[] {
   if (archId === 'x86-64') return x8664;
@@ -18,13 +17,14 @@ const SHOW = 40;
 export interface SyscallPanelOpts {
   listEl: HTMLElement;
   searchEl: HTMLInputElement;
+  initialArch?: string;
   /** called with the syscall entry the user clicked */
   onPick: (entry: SyscallEntry) => void;
 }
 
-export function createSyscallPanel({ listEl, searchEl, onPick }: SyscallPanelOpts): void {
-  let currentArch = 'x86-64';
-  let filter = '';
+export function createSyscallPanel({ listEl, searchEl, initialArch = 'x86-64', onPick }: SyscallPanelOpts): void {
+  let currentArch = initialArch;
+  let filter = searchEl.value;
 
   const render = (): void => {
     const table = tableFor(currentArch);
@@ -89,8 +89,6 @@ export function createSyscallPanel({ listEl, searchEl, onPick }: SyscallPanelOpt
 
 /** assembly snippet that loads a syscall number, per arch convention */
 export function syscallScaffold(archId: string, entry: SyscallEntry): string {
-  const arch = getArch(archId);
-  void arch;
   const n = entry.num;
   if (archId === 'x86-64') {
     return `; ${entry.name}${entry.args ? `(${entry.args})` : ''} — syscall #${n}\nmov rax, ${n}\n; rdi, rsi, rdx, r10, r8, r9 = args\nsyscall`;

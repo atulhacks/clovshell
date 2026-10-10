@@ -86,6 +86,7 @@ export function getArch(id: string): ArchDef {
 
 let keystoneMod: KeystoneModule | null = null;
 let capstoneMod: CapstoneModule | null = null;
+let keystoneLoading: Promise<void> | null = null;
 let capstoneLoading: Promise<void> | null = null;
 const ksInstances = new Map<string, KeystoneInstance>();
 const csInstances = new Map<string, CapstoneInstance>();
@@ -95,13 +96,22 @@ export async function initEngines(
   baseURI = document.baseURI,
 ): Promise<void> {
   if (keystoneMod && capstoneMod) return;
-  const locate = (path: string) => new URL(WASM_BASE + path, baseURI).href;
-  if (!keystoneMod) {
-    keystoneMod = await MKeystone({ locateFile: locate });
-    onStage?.('keystone');
-  }
-  await initDisassembler(baseURI);
+  const assembler = initAssembler(baseURI).then(() => onStage?.('keystone'));
+  const disassembler = initDisassembler(baseURI);
+  await Promise.all([assembler, disassembler]);
   onStage?.('capstone');
+}
+
+async function initAssembler(baseURI = document.baseURI): Promise<void> {
+  if (keystoneMod) return;
+  if (keystoneLoading) return keystoneLoading;
+  const locate = (path: string) => new URL(WASM_BASE + path, baseURI).href;
+  keystoneLoading = MKeystone({ locateFile: locate }).then((mod) => { keystoneMod = mod; });
+  try {
+    await keystoneLoading;
+  } finally {
+    keystoneLoading = null;
+  }
 }
 
 export async function initDisassembler(baseURI = document.baseURI): Promise<void> {

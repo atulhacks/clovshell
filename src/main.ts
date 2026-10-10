@@ -35,7 +35,6 @@ import { compareScenario, flowKeys, parseScenarioArgs, SCENARIO_CAP } from './sc
 import { xorEncode } from './encoder';
 import { gadgetRows } from './gadgets';
 import type { Gadget } from './gadgets';
-import { createSyscallPanel, syscallScaffold } from './syscalls';
 import { PRESETS } from './presets';
 import { RunSessionStore } from './run-session';
 import type { EvidenceSelection, RunDocument, RunRecord } from './run-session';
@@ -1934,13 +1933,28 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 
 // --- syscall reference --------------------------------------------------------------
 
-createSyscallPanel({
-  listEl: $('#syscall-list'),
-  searchEl: $<HTMLInputElement>('#syscall-search'),
-  onPick: (entry) => {
-    editor.insertAtCursor(syscallScaffold(archId, entry));
-  },
+let syscallPanelLoad: Promise<void> | null = null;
+function ensureSyscallPanel(): Promise<void> {
+  if (syscallPanelLoad) return syscallPanelLoad;
+  const list = $('#syscall-list');
+  list.replaceChildren(el('div', { class: 'listing-empty' }, 'Loading syscall reference…'));
+  syscallPanelLoad = import('./syscalls').then(({ createSyscallPanel, syscallScaffold }) => {
+    createSyscallPanel({
+      listEl: list,
+      searchEl: $<HTMLInputElement>('#syscall-search'),
+      initialArch: archId,
+      onPick: (entry) => editor.insertAtCursor(syscallScaffold(archId, entry)),
+    });
+  }).catch(() => {
+    syscallPanelLoad = null;
+    list.replaceChildren(el('div', { class: 'listing-empty' }, 'Reference unavailable. Switch views and retry.'));
+  });
+  return syscallPanelLoad;
+}
+document.addEventListener('lab:tab', (event) => {
+  if ((event as CustomEvent<string>).detail === 'reference') void ensureSyscallPanel();
 });
+if ($('#lab-tab-reference').getAttribute('aria-selected') === 'true') void ensureSyscallPanel();
 
 // --- presets --------------------------------------------------------------------------
 

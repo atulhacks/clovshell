@@ -161,3 +161,18 @@ test('run history restores original architecture, evidence, and selection', asyn
   await expect(page.locator('#lab-run-state')).toHaveText('NO RUN');
   await expect(page.locator('#lab-run-history-list .lab-run-row')).toHaveCount(0);
 });
+
+test('syscall reference loads on demand and tracks the active architecture', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name.startsWith('mobile-') || testInfo.project.name.startsWith('tablet-'), 'desktop reference');
+  await page.goto('/');
+  await expect(page.locator('#btn-assemble')).toBeEnabled();
+  await expect(page.locator('#syscall-list .syscall-item')).toHaveCount(0);
+  await page.locator('#arch-select').selectOption('arm64');
+  await page.locator('#lab-tab-reference').click();
+  await page.locator('#syscall-search').fill('exit');
+  await expect(page.locator('#syscall-list .syscall-item').first()).toContainText('93');
+  await page.locator('#syscall-list .syscall-item').first().click();
+  await expect(page.locator('#asm-editor-host textarea')).toHaveValue(/mov x8, 93/);
+  await page.locator('#arch-select').selectOption('x86-64');
+  await expect(page.locator('#syscall-list .syscall-item').first()).toContainText('60');
+});

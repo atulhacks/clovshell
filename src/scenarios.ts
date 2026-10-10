@@ -3,6 +3,8 @@ import type { FlowNode } from './flow';
 import { toHex } from './hex';
 
 export const SCENARIO_CAP = 8;
+type FlowKeys = { nodes: string[]; edges: Set<string>; path: string[] };
+const flowKeyCache = new WeakMap<EmuResult, FlowKeys>();
 
 export function parseScenarioArgs(raw: string, archId: string): bigint[] {
   const tokens = raw.trim().split(/[\s,;]+/).filter(Boolean);
@@ -25,7 +27,9 @@ function stageFingerprint(result: EmuResult, id: number | null): string {
   return `${stage.origin}:${stage.pageBase}:${stage.snapshot.length}:${hash.toString(16)}`;
 }
 
-export function flowKeys(result: EmuResult): { nodes: string[]; edges: Set<string>; path: string[] } {
+export function flowKeys(result: EmuResult): FlowKeys {
+  const cached = flowKeyCache.get(result);
+  if (cached) return cached;
   const stages = new Map<number | null, string>();
   const key = (node: FlowNode): string => {
     if (!stages.has(node.stageId)) stages.set(node.stageId, stageFingerprint(result, node.stageId));
@@ -34,7 +38,9 @@ export function flowKeys(result: EmuResult): { nodes: string[]; edges: Set<strin
   const nodes = result.flow.nodes.map(key);
   const edges = new Set(result.flow.edges.map((edge) => `${nodes[edge.fromId]}→${nodes[edge.toId]}`));
   const path = result.flow.path.map((id) => nodes[id] ?? `missing:${id}`);
-  return { nodes, edges, path };
+  const keys = { nodes, edges, path };
+  flowKeyCache.set(result, keys);
+  return keys;
 }
 
 export interface ScenarioComparison {
